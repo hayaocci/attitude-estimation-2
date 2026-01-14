@@ -1,0 +1,18 @@
+datasets/ 
+raw/ 
+trash/ 
+aug_out/  
+paper_imgs/ 
+test_imgs/ 
+# logs/type-1/ResNet18Scaled_0p25  
+# logs/type-1/ResNet18Scaled_0p5  
+# logs/type-1/ResNet18Scaled_0p75  
+dataset_edit_test/ 
+logs/ 
+lab_logs/ 
+hsv_logs/ 
+config_lab_old.yaml
+config_lab.yaml
+config.yaml
+config_hsv.yaml
+config-history/ 
