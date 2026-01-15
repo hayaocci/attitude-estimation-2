@@ -276,5 +276,3 @@ datasets/<DATASET>/cache/<INPUT_MODE>/sz<IMG>_<RESIZE>/valid/imgs/
 - **学習データ差分の影響評価**
 
 が容易になります。
-
-必要なら Jupyter notebook 用の分析テンプレートも作れます。お気軽にどうぞ！
