@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # code_B_eval_all.py
 from __future__ import annotations
-import argparse, math, cv2, yaml
+import argparse, math, re, cv2, yaml
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import matplotlib; matplotlib.use("Agg")  # GUIなし環境用
 import matplotlib.pyplot as plt
@@ -33,7 +33,33 @@ def parse_args():
                         help="lab_logs のルートディレクトリ (default: lab_logs)")
     parser.add_argument("--dataset_root", type=str, default="datasets",
                         help="datasets のルートディレクトリ (default: datasets)")
+
+    # ★ 追加: 評価対象とする exp の範囲指定
+    parser.add_argument("--exp_from", type=str, default=None,
+                        help="評価を開始する exp ID (例: exp05 または 5)")
+    parser.add_argument("--exp_to", type=str, default=None,
+                        help="評価を終了する exp ID (例: exp12 または 12)")
+
     return parser.parse_args()
+
+# ============================================================
+#  ヘルパー: "exp05" や "05" から数値 5 を取り出す
+# ============================================================
+def parse_exp_number(exp_name_or_num: str) -> Optional[int]:
+    """
+    入力が "exp05" / "exp5" / "05" / "5" などの場合に、数値部分だけ int で返す。
+    うまく取れなければ None。
+    """
+    if exp_name_or_num is None:
+        return None
+    s = exp_name_or_num.strip()
+    m = re.search(r"(\d+)$", s)  # 末尾の数字列
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
 
 # ============================================================
 # 1. 角度計算・数学ヘルパー
@@ -398,7 +424,7 @@ def eval_one_exp(exp_dir: Path, args):
     print(f"  Done: {exp_dir.name}")
 
 # ============================================================
-# 7. メイン：lab_logs/ 配下の exp* を全部評価
+# 7. メイン：lab_logs/ 配下の exp* を範囲指定して評価
 # ============================================================
 def main():
     args = parse_args()
@@ -407,14 +433,37 @@ def main():
         print(f"[ERROR] log_root not found: {log_root}")
         return
 
-    exp_dirs = sorted(
+    # --exp_from / --exp_to を数値に変換 (例: "exp05" -> 5)
+    from_num = parse_exp_number(args.exp_from)
+    to_num   = parse_exp_number(args.exp_to)
+
+    all_exp_dirs = sorted(
         [p for p in log_root.iterdir() if p.is_dir() and p.name.startswith("exp")]
     )
+
+    exp_dirs = []
+    for p in all_exp_dirs:
+        m = re.match(r"^exp(\d+)$", p.name)
+        if not m:
+            continue
+        n = int(m.group(1))
+        if (from_num is not None) and (n < from_num):
+            continue
+        if (to_num is not None) and (n > to_num):
+            continue
+        exp_dirs.append((n, p))
+
+    exp_dirs = [p for _, p in sorted(exp_dirs, key=lambda x: x[0])]
+
     if not exp_dirs:
-        print(f"[WARN] No exp* directories found under {log_root}")
+        print(f"[WARN] No exp* directories found under {log_root} with range filter.")
         return
 
-    print(f"Found {len(exp_dirs)} experiments under {log_root}")
+    if from_num is not None or to_num is not None:
+        print(f"Evaluating experiments in range: "
+              f"{args.exp_from or 'min'} .. {args.exp_to or 'max'}")
+    print(f"Found {len(exp_dirs)} experiments to evaluate.")
+
     for exp_dir in exp_dirs:
         print(f"\n=== Evaluating {exp_dir.name} ===")
         try:
