@@ -27,6 +27,8 @@ class CONFIG:
     # 追加した "stretch" を含めています
     # SELECTED_BASES = ["iso_noise", "blur", "bright", "vstrip", "stretch"]
     SELECTED_BASES = ["iso_noise", "blur", "vstrip", "stretch"]
+    # SELECTED_BASES = ["stretch"]
+
 
     # 2. 派生変換の有効化
     ENABLE_RBBOX  = True
@@ -34,7 +36,7 @@ class CONFIG:
     ENABLE_HIDE   = True
 
     # 3. 保存設定
-    SAVE_BASE_TRANSFORMS = False
+    SAVE_BASE_TRANSFORMS = True
 
 # ──────────────────────────────────────────────────────────────
 # 変換ロジック
@@ -258,7 +260,7 @@ def main():
     pa.add_argument("--iso_sigma", type=float, default=8.0)
     pa.add_argument("--bright", nargs=2, type=float, default=[0.7, 1.3])
     pa.add_argument("--blur_k", nargs=2, type=int, default=[5, 9])
-    pa.add_argument("--stretch_range", nargs=2, type=float, default=[1.1, 1.15]) # [NEW] 1.05~1.1倍
+    pa.add_argument("--stretch_range", nargs=2, type=float, default=[1.0, 1.5]) # [NEW] 1.05~1.1倍
     pa.add_argument("--rand_boxes", nargs=2, type=int, default=[1, 3])
     pa.add_argument("--rand_box_wh", nargs=2, type=int, default=[20, 60])
     pa.add_argument("--rand_box_area", nargs=4, type=int, default=[0, 0, 224, 224])
