@@ -364,7 +364,7 @@ def run_experiment(cfg):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="config_lab.yaml")
+    parser.add_argument("--config", default="config_lab_ch01.yaml")
     args = parser.parse_args()
     
     configs = load_configs(args.config)

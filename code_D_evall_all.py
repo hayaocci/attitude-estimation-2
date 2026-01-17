@@ -30,7 +30,7 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--log_root", type=str, default="lab_logs_ch01",
-                        help="lab_logs_ch01 のルートディレクトリ (default: lab_logs)")
+                        help="lab_logs_ch01 のルートディレクトリ (default: lab_logs_ch01)")
     parser.add_argument("--dataset_root", type=str, default="datasets",
                         help="datasets のルートディレクトリ (default: datasets)")
 
