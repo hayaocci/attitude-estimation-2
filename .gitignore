@@ -11,6 +11,7 @@ dataset_edit_test/
 logs/ 
 lab_logs/ 
 lab_logs_ch01/
+lab_logs_ch03/
 hsv_logs/ 
 config_lab_old.yaml
 config_lab.yaml
@@ -18,3 +19,4 @@ config.yaml
 config_hsv.yaml
 config-history/ 
 config_lab_ch01.yaml
+config_lab_ch03.yaml
