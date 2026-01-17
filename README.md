@@ -55,6 +55,12 @@
 このaugmentationには、画像の縦方向および横法への拡大（引き伸ばし）をするものである。  
 パラメータは `strech range` である。  
 
+### コードの解説
+
+
+
+
+
 
 # lab_logs Evaluation Tools
 
@@ -276,3 +282,4 @@ datasets/<DATASET>/cache/<INPUT_MODE>/sz<IMG>_<RESIZE>/valid/imgs/
 - **学習データ差分の影響評価**
 
 が容易になります。
+

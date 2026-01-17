@@ -169,9 +169,15 @@ class ImageRegressionDataset(Dataset):
         if self.color_mode == "lab":
             # 2. RGB -> Lab 変換
             img_lab = cv2.cvtColor(img_np, cv2.COLOR_RGB2LAB).astype(np.float32)
-            # 3. 正規化 (uint8 0-255 を [-1, 1] 程度にマッピング)
-            img_lab = (img_lab / 255.0 - 0.5) / 0.5
-            img_tensor = torch.from_numpy(img_lab.transpose(2, 0, 1))
+
+            # 3. Lチャンネルのみを取り出す (H, W, 1)
+            L = img_lab[:, :, 0:1]
+
+            # 4. 正規化: uint8 [0,255] → おおよそ [-1, 1]
+            L = (L / 255.0 - 0.5) / 0.5
+
+            # 5. (H, W, 1) → (1, H, W) にして Tensor 化
+            img_tensor = torch.from_numpy(L.transpose(2, 0, 1))
         else:
             # RGBモード
             img_tensor = transforms.ToTensor()(img_pil)
@@ -179,6 +185,7 @@ class ImageRegressionDataset(Dataset):
 
         target_deg = torch.tensor(self.targets_deg[idx])
         return img_tensor, target_deg, self.paths[idx].name
+
 
 # ============================================================
 # Utility Functions
@@ -210,7 +217,7 @@ def load_configs(cfg_path: str | Path) -> List[Dict]:
     return processed
 
 def make_log_dir(cfg: Dict) -> Path:
-    # ③ 保存先を lab_logs_ch03/{id} に設定
+    # ③ 保存先を lab_logs/{id} に設定
     run_dir = Path("lab_logs_ch03") / cfg["id"]
     run_dir.mkdir(parents=True, exist_ok=True)
     
@@ -286,15 +293,27 @@ def run_experiment(cfg):
     color_mode = cfg.get("COLOR_MODE", "lab")
 
     # データローダーの準備
-    train_ld = DataLoader(ImageRegressionDataset(cfg["TRAIN_DIR"], img_sz, color_mode=color_mode), 
-                          cfg["BATCH_SIZE"], True, num_workers=cfg.get("NUM_WORKERS", 4))
-    valid_ld = DataLoader(ImageRegressionDataset(cfg["VALID_DIR"], img_sz, color_mode=color_mode), 
-                          cfg["BATCH_SIZE"], False, num_workers=cfg.get("NUM_WORKERS", 4))
+    train_ld = DataLoader(
+        ImageRegressionDataset(cfg["TRAIN_DIR"], img_sz, color_mode=color_mode),
+        cfg["BATCH_SIZE"], True, num_workers=cfg.get("NUM_WORKERS", 4)
+    )
+    valid_ld = DataLoader(
+        ImageRegressionDataset(cfg["VALID_DIR"], img_sz, color_mode=color_mode),
+        cfg["BATCH_SIZE"], False, num_workers=cfg.get("NUM_WORKERS", 4)
+    )
 
-    # モデルのビルド
+    # ---- ここから修正ポイント ----
     width = parse_width_from_name(cfg["MODEL_NAME"], 1.0)
-    model = ResNet18Dilated(in_ch=3, out_dim=2, width_mult=width, 
-                            hidden_dim=cfg["HIDDEN_DIM"], dropout_p=cfg["DROPOUT_P"]).to(device)
+
+    model = ResNet18Dilated(
+        in_ch=3,
+        out_dim=2,
+        width_mult=width,
+        hidden_dim=cfg["HIDDEN_DIM"],
+        dropout_p=cfg["DROPOUT_P"]
+    ).to(device)
+    # ---- 修正ここまで ----
+
 
     # ② 学習済みモデルのロード機能
     if cfg.get("USE_PRETRAINED", False):
