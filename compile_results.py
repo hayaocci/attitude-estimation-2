@@ -20,8 +20,8 @@ def parse_args():
     parser.add_argument("--dataset", required=True, help="評価対象の datasets/ 配下のフォルダ名 (例: type-8)")
     parser.add_argument("--split", default="valid", choices=["train", "valid", "test"],
                         help="評価に使った split 名 (default: valid)")
-    parser.add_argument("--log_root", type=str, default="lab_logs_ch01",
-                        help="lab_logs_ch01 のルートディレクトリ (default: lab_logs_ch01)")
+    parser.add_argument("--log_root", type=str, default="lab_logs",
+                        help="lab_logs のルートディレクトリ (default: lab_logs)")
     return parser.parse_args()
 
 # ============================================================
