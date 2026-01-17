@@ -306,7 +306,7 @@ def eval_one_exp(exp_dir: Path, args):
     resize_mode = cfg.get("RESIZE_MODE", "area")
 
     model = ResNet18Dilated(
-        in_ch=1,
+        in_ch=3,
         out_dim=2,
         width_mult=width,
         hidden_dim=hidden_dim,
