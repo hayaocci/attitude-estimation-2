@@ -382,6 +382,7 @@ def build_augment_config_dict(
         "fixed_color": args.fixed_color,
         "rand_color": args.rand_color,
         "cache_subdirs": list(args.cache_subdirs),
+        "split_name": args.split_name,  # ← これを追加
         "params": {
             "vstrip_n": list(args.vstrip_n),
             "strip_bright_range": [float(args.strip_bright_range[0]), float(args.strip_bright_range[1])],
@@ -566,6 +567,8 @@ def main():
         help="出力先ルートディレクトリ。ここに <in_path名>_aug-vN フォルダが自動作成される（例: datasets）"
     )
 
+    pa.add_argument("--split_name", default="train", help="処理対象のサブフォルダ名 (train/val/test)")
+
     # cache サブフォルダの指定
     pa.add_argument(
         "--cache_subdirs",
@@ -737,10 +740,10 @@ def main():
             for p in base.rglob("*")
             if p.is_dir()
             and re.search(r"sz\d+_area$", p.name)
-            and (p / "train/imgs").exists()
+            and (p / args.split_name / "imgs").exists()  # ← ここを split_name に
         ]
         if not sub_targets:
-            print(f"[WARN] no sz*_area/train/imgs found under: {base}")
+            print(f"[WARN] no sz*_area/{args.split_name}/imgs found under: {base}")
         target_dirs.extend(sub_targets)
 
     if not target_dirs:
@@ -757,20 +760,24 @@ def main():
         scaler = BBoxScaler(s)
 
         rel_path = in_dir.relative_to(in_base)
-        train_out = final_out_root / rel_path / "train"
-        img_out_dir = train_out / "imgs"
+
+        # 出力先: .../<cache_subdir>/szXXX_area/<split_name>/imgs
+        split_out = final_out_root / rel_path / args.split_name
+        img_out_dir = split_out / "imgs"
         img_out_dir.mkdir(parents=True, exist_ok=True)
 
-        train_in = in_dir / "train"
-        src = sorted((train_in / "imgs").glob("*.png")) + sorted(
-            (train_in / "imgs").glob("*.jpg")
+        # 入力元: .../<cache_subdir>/szXXX_area/<split_name>/imgs
+        split_in = in_dir / args.split_name
+        src = sorted((split_in / "imgs").glob("*.png")) + sorted(
+            (split_in / "imgs").glob("*.jpg")
         )
         if args.test:
             src = src[:10]
 
+        # labels.csv も split_name 配下から読み込む
         meta = {
             r["filename"]: r
-            for r in list(csv.DictReader((train_in / "labels.csv").open()))
+            for r in list(csv.DictReader((split_in / "labels.csv").open()))
         }
 
         # スケーリング済み引数
@@ -819,10 +826,13 @@ def main():
             ):
                 all_new_rows.extend(f.result())
 
-        with (train_out / "labels.csv").open("w", newline="") as f:
+        # 出力側 labels.csv も split_name 配下に書く
+        with (split_out / "labels.csv").open("w", newline="") as f:
             w = csv.DictWriter(f, ["filename", "roll", "pitch", "yaw"])
             w.writeheader()
             w.writerows(all_new_rows)
+
+
 
     # ─── augment_config.yaml を保存 ───
     cfg_dict = build_augment_config_dict(args, in_base, final_out_root, targets_info)
