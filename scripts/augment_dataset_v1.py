@@ -8,6 +8,7 @@ augment_sz_area_v5_batch_parallel.py
 * ベース変換のみの保存可否をフラグで制御可能
 * [NEW] stretch（縦横引き伸ばし）変換をベース変換に追加
 * [NEW] 実行時のデータ拡張設定を augment_config.yaml として保存
+* [NEW] --cache_subdirs により cache/rgb, cache/gray, cache/bin4 など対象サブフォルダを指定可能
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ import numpy as np
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import time
-import yaml  # [NEW] augment_config.yaml 出力用
+import yaml  # augment_config.yaml 出力用
 
 # ──────────────────────────────────────────────────────────────
 # ユーザー設定セクション
@@ -28,13 +29,14 @@ class CONFIG:
     # 1. ベース変換の選択
     # 追加した "stretch" を含めています
     # SELECTED_BASES = ["iso_noise", "blur", "bright", "vstrip", "stretch"]
-    SELECTED_BASES = ["iso_noise", "blur", "vstrip", "stretch"]
+    # SELECTED_BASES = ["iso_noise", "blur", "vstrip", "stretch"]
+    SELECTED_BASES = ["blur"]
     # SELECTED_BASES = ["stretch"]
 
     # 2. 派生変換の有効化
-    ENABLE_RBBOX  = True
-    ENABLE_CROP   = True
-    ENABLE_HIDE   = True
+    ENABLE_RBBOX  = False
+    ENABLE_CROP   = False
+    ENABLE_HIDE   = False
 
     # 3. 保存設定
     SAVE_BASE_TRANSFORMS = True
@@ -48,7 +50,7 @@ def apply_stretch(img: np.ndarray, stretch_range: Tuple[float, float]) -> np.nda
     h, w = img.shape[:2]
     scale = random.uniform(*stretch_range)
     
-    # 縦(0)か横(1)かをランダムに決定
+    # 縦か横かをランダムに決定
     mode = random.choice(["vertical", "horizontal"])
     
     if mode == "vertical":
@@ -379,6 +381,7 @@ def build_augment_config_dict(
         "save_base_transforms": bool(CONFIG.SAVE_BASE_TRANSFORMS),
         "fixed_color": args.fixed_color,
         "rand_color": args.rand_color,
+        "cache_subdirs": list(args.cache_subdirs),
         "params": {
             "vstrip_n": list(args.vstrip_n),
             "strip_bright_range": [float(args.strip_bright_range[0]), float(args.strip_bright_range[1])],
@@ -547,34 +550,6 @@ def build_augment_config_dict(
 # メイン処理
 # ──────────────────────────────────────────────────────────────
 def main():
-    # pa = argparse.ArgumentParser()
-    # pa.add_argument("--in_path",  required=True)
-    # pa.add_argument("--out_root", required=True)
-    # pa.add_argument("--fixed_color", default="random_gray")
-    # pa.add_argument("--rand_color",  default="random_gray")
-    # pa.add_argument("--seed", type=int, default=42)
-    # pa.add_argument("--test", action="store_true")
-    # pa.add_argument(
-    #     "--workers",
-    #     type=int,
-    #     default=os.cpu_count(),
-    #     help="並列実行数（デフォルトはCPUコア数）",
-    # )
-    # # パラメータ
-    # pa.add_argument("--vstrip_n", nargs="+", type=int, default=[2, 4, 5])
-    # pa.add_argument("--strip_bright_range", nargs=2, type=float, default=[30, 100])
-    # pa.add_argument("--strip_blend_ratio", type=float, default=0.1)
-    # pa.add_argument("--iso_sigma", type=float, default=8.0)
-    # pa.add_argument("--bright", nargs=2, type=float, default=[0.7, 1.3])
-    # pa.add_argument("--blur_k", nargs=2, type=int, default=[5, 9])
-    # pa.add_argument("--stretch_range", nargs=2, type=float, default=[1.0, 1.5])  # [NEW]
-    # pa.add_argument("--rand_boxes", nargs=2, type=int, default=[1, 3])
-    # pa.add_argument("--rand_box_wh", nargs=2, type=int, default=[20, 60])
-    # pa.add_argument("--rand_box_area", nargs=4, type=int, default=[0, 0, 224, 224])
-    # pa.add_argument("--hide_n", nargs=2, type=int, default=[1, 3])
-    # pa.add_argument("--crop_params", nargs=4, type=int, default=[112, 112, 150, 224])
-    # pa.add_argument("--visibility_threshold", type=float, default=0.6)
-    
     pa = argparse.ArgumentParser(
         description="type-X 配下の cache/szXXX_area/train をまとめてデータ拡張し、*_aug-vN フォルダとして出力するスクリプト"
     )
@@ -589,6 +564,14 @@ def main():
         "--out_root",
         required=True,
         help="出力先ルートディレクトリ。ここに <in_path名>_aug-vN フォルダが自動作成される（例: datasets）"
+    )
+
+    # cache サブフォルダの指定
+    pa.add_argument(
+        "--cache_subdirs",
+        nargs="+",
+        default=["rgb", "gray", "bin4"],
+        help="cache 配下でデータ拡張を行うサブフォルダ名リスト。例: rgb gray bin4。指定しない場合は3つすべてを処理する。"
     )
 
     # 色・乱数・テスト設定
@@ -661,7 +644,7 @@ def main():
         "--blur_k",
         nargs=2,
         type=int,
-        default=[5, 9],
+        default=[3, 3],
         help="ガウシアンぼかしのカーネルサイズ範囲 [min, max]。内部では奇数に丸めて使用（例: 5,7,9）。"
     )
 
@@ -720,7 +703,7 @@ def main():
         default=0.6,
         help="crop & paste で貼り付ける際に、切り出した領域の少なくともこの割合 (0〜1) が画像内に見えるように配置する閾値。"
     )
-        
+
     args = pa.parse_args()
 
     random.seed(args.seed)
@@ -740,16 +723,28 @@ def main():
     # 念のため先にルートを作成しておく
     final_out_root.mkdir(parents=True, exist_ok=True)
 
-    # 対象ディレクトリ探索
-    target_dirs = [
-        p
-        for p in (in_base / "cache").rglob("*")
-        if p.is_dir()
-        and re.search(r"sz\d+_area$", p.name)
-        and (p / "train/imgs").exists()
-    ]
+    # 対象ディレクトリ探索（cache_subdirs を考慮）
+    target_dirs: List[Path] = []
+    cache_root = in_base / "cache"
+
+    for sub in args.cache_subdirs:
+        base = cache_root / sub
+        if not base.exists():
+            print(f"[WARN] cache subdir not found: {base} → skipping")
+            continue
+        sub_targets = [
+            p
+            for p in base.rglob("*")
+            if p.is_dir()
+            and re.search(r"sz\d+_area$", p.name)
+            and (p / "train/imgs").exists()
+        ]
+        if not sub_targets:
+            print(f"[WARN] no sz*_area/train/imgs found under: {base}")
+        target_dirs.extend(sub_targets)
+
     if not target_dirs:
-        print("[!] No target dirs found under cache/sz*_area/train/imgs")
+        print("[!] No target dirs found under specified cache_subdirs")
         return
 
     # 各 szXXX_area ごとのスケール済みパラメータを記録するリスト

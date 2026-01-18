@@ -219,8 +219,8 @@ def load_configs(cfg_path: str | Path) -> List[Dict]:
     return processed
 
 def make_log_dir(cfg: Dict) -> Path:
-    # ③ 保存先を lab_logs_ch03/{id} に設定
-    run_dir = Path("lab_logs_ch03") / cfg["id"]
+    # ③ 保存先を lab_logs/{id} に設定
+    run_dir = Path("lab_logs") / cfg["id"]
     run_dir.mkdir(parents=True, exist_ok=True)
     
     with open(run_dir / "config_used.yaml", "w", encoding="utf-8") as f:
