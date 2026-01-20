@@ -30,8 +30,9 @@ class CONFIG:
     # 追加した "stretch" を含めています
     # SELECTED_BASES = ["iso_noise", "blur", "bright", "vstrip", "stretch"]
     # SELECTED_BASES = ["iso_noise", "blur", "vstrip", "stretch"]
-    SELECTED_BASES = ["blur"]
+    # SELECTED_BASES = ["blur"]
     # SELECTED_BASES = ["stretch"]
+    SELECTED_BASES = ["iso_noise", "blur", "bright", "stretch"]
 
     # 2. 派生変換の有効化
     ENABLE_RBBOX  = False
@@ -647,7 +648,7 @@ def main():
         "--blur_k",
         nargs=2,
         type=int,
-        default=[7, 7],
+        default=[3, 7],
         help="ガウシアンぼかしのカーネルサイズ範囲 [min, max]。内部では奇数に丸めて使用（例: 5,7,9）。"
     )
 
@@ -688,7 +689,7 @@ def main():
         "--hide_n",
         nargs=2,
         type=int,
-        default=[1, 3],
+        default=[1, 2],
         help="hide_quadrants でマスクするクォドラント数のレンジ [min, max]。4 分割のうちランダムにこの個数だけ塗りつぶす。"
     )
 
