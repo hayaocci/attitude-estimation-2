@@ -647,7 +647,7 @@ def main():
         "--blur_k",
         nargs=2,
         type=int,
-        default=[3, 3],
+        default=[7, 7],
         help="ガウシアンぼかしのカーネルサイズ範囲 [min, max]。内部では奇数に丸めて使用（例: 5,7,9）。"
     )
 
