@@ -25,24 +25,23 @@
 
 ### augment_dataset_v4.pyの使い方
 
-| Option                        |     Default     | Summary                                      |
-| ----------------------------- | :-------------: | -------------------------------------------- |
-| `--path DIR`                  |        —        | **Input directory** containing PNG / JPG     |
-| `--out DIR`                   |    `aug_out`    | Output directory (auto-create)               |
-| `--test`                      |       off       | Augment *5 random images* only (→ 105 files) |
-| `--seed N`                    |       `42`      | RNG seed for reproducibility                 |
-| **ISO / Photometric**         |                 |                                              |
-| `--iso_sigma F`               |     **8.0**     | Gaussian σ for high-ISO noise (≈ ISO 1600)   |
-| `--bright LO HI`              |   **0.9 1.1**   | Random brightness scale in `[LO,HI]`         |
-| `--blur_k MIN MAX`            |     **3 7**     | Gaussian-blur kernel size (odd, px)          |
-| **BBox Masks**                |                 |                                              |
-| `--rand_boxes MIN MAX`        |     **1 3**     | # of *random* black boxes                    |
-| `--rand_box_wh MIN MAX`       |    **20 60**    | Width / height of those boxes (px)           |
-| `--rand_box_area x1 y1 x2 y2` | **0 0 224 224** | Area where random boxes may appear           |
-| **Quadrant Hide**             |                 |                                              |
-| `--hide_n MIN MAX`            |     **1 3**     | Number of quadrants (out of 4) to black out  |
-| **Crop / Zoom**               |                 |                                              |
-| `--crop_scale MIN MAX`        |   **0.3 1.0**   | Center-crop size ratio before random resize  |
+| 項目          | 内容                                                                                |
+| ----------- | --------------------------------------------------------------------------------- |
+| 入力ルート       | `--in_path` で指定した `datasets/type-X` 直下の `cache/` フォルダ                             |
+| 対象サブフォルダ    | `cache/rgb`, `cache/gray`, `cache/bin4`（`--cache_subdirs` で任意選択可）                 |
+| 対象 split    | `szXXX_area/<split_name>/imgs`（`--split_name` で `train` / `valid` / `test` などを指定） |
+| 対象画像サイズフォルダ | `sz56_area`, `sz112_area`, `sz224_area` など、`sz\d+_area` にマッチするフォルダ                |
+| 対象画像ファイル    | `imgs/` 配下の `.png` および `.jpg`                                                     |
+| メタデータ       | 各 `szXXX_area/<split>/labels.csv`（`filename, roll, pitch, yaw`）を読み込み・更新           |
+| 出力ルート       | `--out_root` の直下に `<in_path の名前>_aug-vN/` を自動採番で作成（例: `type-2_aug-v2`）            |
+| 出力ディレクトリ構造  | 元と同じ構造を再現：`cache/<subdir>/szXXX_area/<split>/imgs`, `labels.csv`                  |
+| ベース変換       | `iso_noise`, `blur`, `vstrip`, `stretch`（`CONFIG.SELECTED_BASES` で選択）             |
+| 派生変換        | 固定 + ランダム BBOX (`*_rbbox`), crop & paste (`*_crop`), クォドラント隠し (`*_hide`)          |
+| 出力画像ファイル名   | 元画像名 + `_tag` 形式（例: `0000_iso_noise_rbbox.png`）                                   |
+| 並列処理        | `ProcessPoolExecutor` によるマルチプロセス処理（`--workers` で数を指定）                             |
+| テストモード      | `--test` で各 `szXXX_area` の先頭 10 枚のみ処理                                             |
+| 設定ログ        | 実行時の全パラメータ・有効な拡張内容を `augment_config.yaml` として出力ルート直下に保存                           |
+
 
 `python scripts/augment_dataset_v5.py --in_path datasets/type-2/cache/rgb/sz224_area --out_root datasets/type-2_aug-rainbow --test`
 
