@@ -30,16 +30,16 @@ import yaml  # augment_config.yaml 出力用
 class CONFIG:
     # 1. ベース変換の選択
     # 追加した "stretch" を含めています
-    SELECTED_BASES = ["iso_noise", "blur", "bright", "vstrip", "stretch"]
-    # SELECTED_BASES = ["iso_noise", "blur", "vstrip", "stretch"]
+    # SELECTED_BASES = ["iso_noise", "blur", "bright", "vstrip", "stretch"]
+    SELECTED_BASES = ["iso_noise", "bright", "vstrip", "stretch"]
     # SELECTED_BASES = ["blur"]
     # SELECTED_BASES = ["stretch"]
     # SELECTED_BASES = ["vstrip", "stretch"]
 
     # 2. 派生変換の有効化
     ENABLE_RBBOX  = True
-    ENABLE_CROP   = True
-    ENABLE_HIDE   = True
+    ENABLE_CROP   = False
+    ENABLE_HIDE   = False
 
     # 3. 保存設定
     SAVE_BASE_TRANSFORMS = True
@@ -662,12 +662,12 @@ def main():
     # 色・乱数・テスト設定
     pa.add_argument(
         "--fixed_color",
-        default="gray",
+        default="random_rainbow",
         help="固定BBOX（roll 依存の矩形）を塗りつぶすときの色モード。black/white/gray/random_gray など。"
     )
     pa.add_argument(
         "--rand_color",
-        default="gray",
+        default="random_rainbow",
         help="ランダムBBOXを塗りつぶすときの色モード。black/white/gray/random_gray など。"
     )
     pa.add_argument(
@@ -729,7 +729,7 @@ def main():
         "--blur_k",
         nargs=2,
         type=int,
-        default=[3, 7],
+        default=[7, 7],
         help="ガウシアンぼかしのカーネルサイズ範囲 [min, max]。内部では奇数に丸めて使用（例: 5,7,9）。"
     )
 
