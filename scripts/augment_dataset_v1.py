@@ -9,6 +9,8 @@ augment_sz_area_v5_batch_parallel.py
 * [NEW] stretch（縦横引き伸ばし）変換をベース変換に追加
 * [NEW] 実行時のデータ拡張設定を augment_config.yaml として保存
 * [NEW] --cache_subdirs により cache/rgb, cache/gray, cache/bin4 など対象サブフォルダを指定可能
+* [UPDATED] モダリティ（rgb/gray/bin4）ごとに色の扱いを自動調整し、
+            random 系の塗りつぶしでも各モダリティの一貫性を保つ
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ import yaml  # augment_config.yaml 出力用
 class CONFIG:
     # 1. ベース変換の選択
     # 追加した "stretch" を含めています
-    SELECTED_BASES = ["iso_noise", "bright", "vstrip", "stretch"]
+    SELECTED_BASES = ["iso_noise", "blur", "bright", "vstrip", "stretch"]
     # SELECTED_BASES = ["iso_noise", "blur", "vstrip", "stretch"]
     # SELECTED_BASES = ["blur"]
     # SELECTED_BASES = ["stretch"]
@@ -36,8 +38,8 @@ class CONFIG:
 
     # 2. 派生変換の有効化
     ENABLE_RBBOX  = True
-    ENABLE_CROP   = False
-    ENABLE_HIDE   = False
+    ENABLE_CROP   = True
+    ENABLE_HIDE   = True
 
     # 3. 保存設定
     SAVE_BASE_TRANSFORMS = True
@@ -205,7 +207,11 @@ def fill_roi_partial(img, tl, br, color):
     if img.ndim == 2:
         sub[:] = color[0]
     else:
-        sub[:] = color if len(color) == 3 else (color[0],) * 3
+        # color が 1 要素なら 3ch に複製、3 要素ならそのまま
+        if len(color) == 3:
+            sub[:] = color
+        else:
+            sub[:] = (color[0],) * 3
 
 def apply_fixed_bboxes(img, roll, scaler, color_fn):
     out = img.copy()
@@ -282,23 +288,98 @@ def process_single_image(
     train_out_imgs: Path,
     f_col_key: str,
     r_col_key: str,
+    modality: str,
 ):
-    """画像1枚を読み込んで全バリエーションを保存する関数（並列ワーカー）"""
+    """
+    画像1枚を読み込んで全バリエーションを保存する関数（並列ワーカー）
+    modality: "rgb", "gray", "bin4" など cache サブフォルダ名に対応
+    """
     img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
     if img is None:
         return []
 
-    # 色生成関数の再構築
-    def get_color(kw):
-        if kw == "black":
-            return (0,)
-        if kw == "white":
-            return (255,)
-        if kw == "gray":
-            return (128,)
-        if kw == "random_gray":
-            return (random.randint(0, 255),)
-        return tuple(random.randint(0, 255) for _ in range(3))
+    mode = (modality or "").lower()
+    if mode not in ("rgb", "gray", "bin4"):
+        # 想定外の名前が来たら、とりあえず rgb と同様に扱う
+        mode = "rgb"
+
+    # bin4 の場合は、元画像が持っている輝度レベルを抽出しておく
+    unique_levels = None
+    if mode == "bin4":
+        gray_for_levels = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        unique_levels = np.unique(gray_for_levels)
+
+    # 色生成関数（モダリティ aware）
+    def get_color(kw: str):
+        """
+        kw: fixed_color / rand_color のキーワード
+        mode:
+          - rgb  : フルカラーを許容
+          - gray : 必ずグレイスケール（R=G=B）
+          - bin4 : 元画像が持つ輝度レベルの中から選ぶ（random系）
+        """
+        kw = (kw or "").lower()
+
+        # RGB モード: フルカラーを許容
+        if mode == "rgb":
+            if kw == "black":
+                return (0, 0, 0)
+            if kw == "white":
+                return (255, 255, 255)
+            if kw == "gray":
+                return (128, 128, 128)
+            if kw == "random_gray":
+                v = random.randint(0, 255)
+                return (v, v, v)
+            if kw.startswith("random"):
+                # random / random_rainbow / その他 random* 系は
+                # フルカラーで OK
+                return tuple(random.randint(0, 255) for _ in range(3))
+            # デフォルトは中間グレー
+            return (128, 128, 128)
+
+        # GRAY / BIN4 モード: 常にグレイスケール
+        if mode in ("gray", "bin4"):
+            v: int
+
+            if mode == "bin4":
+                # bin4 用: 元画素から推定したレベルの中から選ぶ
+                levels = unique_levels
+                if levels is None or len(levels) == 0:
+                    # 何も情報がなければ 0 / 255 の 2値だけを候補に
+                    levels = np.array([0, 255], dtype=np.uint8)
+
+                if kw == "black":
+                    v = int(levels.min())
+                elif kw == "white":
+                    v = int(levels.max())
+                elif kw == "gray":
+                    # 中央付近のレベル
+                    v = int(levels[len(levels) // 2])
+                elif kw.startswith("random"):
+                    v = int(np.random.choice(levels))
+                else:
+                    # デフォルトは中央値
+                    v = int(levels[len(levels) // 2])
+            else:
+                # gray 用: 単純な 0〜255 ランダムグレー
+                if kw == "black":
+                    v = 0
+                elif kw == "white":
+                    v = 255
+                elif kw == "gray":
+                    v = 128
+                elif kw.startswith("random"):
+                    v = random.randint(0, 255)
+                else:
+                    v = 128
+
+            # 1ch の値として返す（fill_roi_partial 内で 3ch に複製される）
+            return (v,)
+
+        # 念のためのフォールバック（ほぼ来ない想定）
+        v = 128
+        return (v,)
 
     f_col_fn = lambda: get_color(f_col_key)
     r_col_fn = lambda: get_color(r_col_key)
@@ -574,19 +655,19 @@ def main():
     pa.add_argument(
         "--cache_subdirs",
         nargs="+",
-        default=["gray"],
+        default=["rgb", "gray", "bin4"],
         help="cache 配下でデータ拡張を行うサブフォルダ名リスト。例: rgb gray bin4。指定しない場合は3つすべてを処理する。"
     )
 
     # 色・乱数・テスト設定
     pa.add_argument(
         "--fixed_color",
-        default="white",
+        default="gray",
         help="固定BBOX（roll 依存の矩形）を塗りつぶすときの色モード。black/white/gray/random_gray など。"
     )
     pa.add_argument(
         "--rand_color",
-        default="random_gray",
+        default="gray",
         help="ランダムBBOXを塗りつぶすときの色モード。black/white/gray/random_gray など。"
     )
     pa.add_argument(
@@ -728,7 +809,8 @@ def main():
     final_out_root.mkdir(parents=True, exist_ok=True)
 
     # 対象ディレクトリ探索（cache_subdirs を考慮）
-    target_dirs: List[Path] = []
+    # → (in_dir, modality) のタプルで保持
+    target_dirs: List[Tuple[Path, str]] = []
     cache_root = in_base / "cache"
 
     for sub in args.cache_subdirs:
@@ -741,11 +823,12 @@ def main():
             for p in base.rglob("*")
             if p.is_dir()
             and re.search(r"sz\d+_area$", p.name)
-            and (p / args.split_name / "imgs").exists()  # ← ここを split_name に
+            and (p / args.split_name / "imgs").exists()  # ← split_name に対応
         ]
         if not sub_targets:
             print(f"[WARN] no sz*_area/{args.split_name}/imgs found under: {base}")
-        target_dirs.extend(sub_targets)
+        for p in sub_targets:
+            target_dirs.append((p, sub))
 
     if not target_dirs:
         print("[!] No target dirs found under specified cache_subdirs")
@@ -754,7 +837,7 @@ def main():
     # 各 szXXX_area ごとのスケール済みパラメータを記録するリスト
     targets_info = []
 
-    for in_dir in target_dirs:
+    for in_dir, modality in target_dirs:
         m = re.search(r"sz(\d+)_area", in_dir.name)
         img_sz = int(m.group(1))
         s = img_sz / 224.0
@@ -793,6 +876,7 @@ def main():
                 "rel_path": str(rel_path),
                 "img_size": img_sz,
                 "scale": s,
+                "modality": modality,
                 "effective_params": {
                     "rand_box_wh": list(temp_args.rand_box_wh),
                     "rand_box_area": list(temp_args.rand_box_area),
@@ -817,13 +901,14 @@ def main():
                     img_out_dir,
                     args.fixed_color,
                     args.rand_color,
+                    modality,
                 )
                 for p in src
             ]
             for f in tqdm(
                 as_completed(futures),
                 total=len(src),
-                desc=f"Processing {rel_path} ({img_sz}px)",
+                desc=f"Processing {rel_path} ({img_sz}px, mode={modality})",
             ):
                 all_new_rows.extend(f.result())
 
@@ -832,8 +917,6 @@ def main():
             w = csv.DictWriter(f, ["filename", "roll", "pitch", "yaw"])
             w.writeheader()
             w.writerows(all_new_rows)
-
-
 
     # ─── augment_config.yaml を保存 ───
     cfg_dict = build_augment_config_dict(args, in_base, final_out_root, targets_info)

@@ -123,7 +123,7 @@ def main():
 
     df_all = pd.concat(all_dfs, axis=0, ignore_index=True)
 
-    compilation_dir = log_root / "compilation"
+    compilation_dir = log_root / "compilation" / dataset
     compilation_dir.mkdir(parents=True, exist_ok=True)
     out_csv = compilation_dir / f"comp_{dataset}_{split}_kf.csv"
     df_all.to_csv(out_csv, index=False)
