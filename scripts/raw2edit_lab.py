@@ -436,7 +436,7 @@ def main():
 
     )
 
-    ap.add_argument("dataset_dir", type=Path, help="datasets/type-1 など")
+    ap.add_argument("--dataset_dir", type=Path, help="datasets/type-1 など")
 
     ap.add_argument("--resize-mode", type=str, default="area", choices=["nearest", "linear", "area", "cubic", "lanczos", "maxpool"],
 

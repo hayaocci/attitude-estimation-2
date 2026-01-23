@@ -20,6 +20,7 @@ config_hsv.yaml
 config-history/ 
 config_lab_ch01.yaml
 config_lab_ch03.yaml
+config_lab_v1.yaml
 lab_logs_old
 config_color.yaml
 c123_logs/

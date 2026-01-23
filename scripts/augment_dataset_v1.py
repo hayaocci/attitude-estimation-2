@@ -31,15 +31,16 @@ class CONFIG:
     # 1. ベース変換の選択
     # 追加した "stretch" を含めています
     # SELECTED_BASES = ["iso_noise", "blur", "bright", "vstrip", "stretch"]
-    SELECTED_BASES = ["iso_noise", "bright", "vstrip", "stretch"]
+    # SELECTED_BASES = ["iso_noise", "bright", "vstrip", "stretch"]
     # SELECTED_BASES = ["blur"]
     # SELECTED_BASES = ["stretch"]
     # SELECTED_BASES = ["vstrip", "stretch"]
+    SELECTED_BASES = ["bright", "vstrip", "stretch"]
 
     # 2. 派生変換の有効化
     ENABLE_RBBOX  = True
-    ENABLE_CROP   = False
-    ENABLE_HIDE   = False
+    ENABLE_CROP   = True
+    ENABLE_HIDE   = True
 
     # 3. 保存設定
     SAVE_BASE_TRANSFORMS = True
