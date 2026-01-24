@@ -32,15 +32,15 @@ class CONFIG:
     # 追加した "stretch" を含めています
     # SELECTED_BASES = ["iso_noise", "blur", "bright", "vstrip", "stretch"]
     # SELECTED_BASES = ["iso_noise", "bright", "vstrip", "stretch"]
-    # SELECTED_BASES = ["blur"]
+    SELECTED_BASES = ["blur"]
     # SELECTED_BASES = ["stretch"]
     # SELECTED_BASES = ["vstrip", "stretch"]
-    SELECTED_BASES = ["bright", "vstrip", "stretch"]
+    # SELECTED_BASES = ["iso_noise", "bright", "vstrip", "stretch"]
 
     # 2. 派生変換の有効化
-    ENABLE_RBBOX  = True
-    ENABLE_CROP   = True
-    ENABLE_HIDE   = True
+    ENABLE_RBBOX  = False
+    ENABLE_CROP   = False
+    ENABLE_HIDE   = False
 
     # 3. 保存設定
     SAVE_BASE_TRANSFORMS = True
@@ -739,7 +739,7 @@ def main():
         "--stretch_range",
         nargs=2,
         type=float,
-        default=[1.0, 1.5],
+        default=[1.0, 1.3],
         help="stretch で縦または横方向にかけるスケール倍率のレンジ [min, max]。1.0 以上で引き伸ばし。"
     )
 
@@ -748,7 +748,7 @@ def main():
         "--rand_boxes",
         nargs=2,
         type=int,
-        default=[1, 3],
+        default=[1, 1],
         help="ランダム BBOX を何個配置するかの個数レンジ [min, max]。この範囲から整数をランダムに選んでその個数だけ生成。"
     )
     pa.add_argument(
@@ -771,7 +771,7 @@ def main():
         "--hide_n",
         nargs=2,
         type=int,
-        default=[1, 2],
+        default=[1, 1],
         help="hide_quadrants でマスクするクォドラント数のレンジ [min, max]。4 分割のうちランダムにこの個数だけ塗りつぶす。"
     )
 
@@ -786,7 +786,7 @@ def main():
     pa.add_argument(
         "--visibility_threshold",
         type=float,
-        default=0.6,
+        default=0.5,
         help="crop & paste で貼り付ける際に、切り出した領域の少なくともこの割合 (0〜1) が画像内に見えるように配置する閾値。"
     )
 

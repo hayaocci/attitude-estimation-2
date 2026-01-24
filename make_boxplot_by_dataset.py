@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
-# code_F_rank_by_inputmode_imgsize.py (COLOR_MODE / BLUR 対応版)
+# code_F_rank_datasets_by_rep_experiment.py
 # -------------------------------------------------
 # comp_XXX_YYY_kf.csv を読み込み、
-#   1) 各 exp (TRAIN_DATASET, id, INPUT_MODE, IMG_SIZE, COLOR_MODE, VALID_DATASET など) ごとに
+#   1) 各 exp (TRAIN_DATASET, id, INPUT_MODE, IMG_SIZE) ごとに
 #      metric_col の mean / max / count を計算 (exp_stats)。
 #
-#   2) (INPUT_MODE, IMG_SIZE) ごとに
+#   2) TRAIN_DATASET ごとに
 #      - mean が最小の exp を「mean代表」
 #      - max が最小の exp を「max代表」
 #      として選出し、代表実験一覧テーブルを PNG で保存。
-#      テーブルには COLOR_MODE や VALID側の blur 情報も表示。
 #
 #   3) 代表実験ごとに、元の CSV から全サンプルの metric を集めて
-#      「代表 (INPUT_MODE × IMG_SIZE) ごとの誤差分布の箱ひげ図」を作成。
+#      「代表expごとの誤差分布の箱ひげ図」を作成。
 #      - mean代表用の箱ひげ図 PNG
 #      - max代表用の箱ひげ図 PNG
 #
@@ -35,7 +34,7 @@ import matplotlib.pyplot as plt
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "comp_*.csv を読み込み、(INPUT_MODE, IMG_SIZE) ごとに代表実験を選出し、"
+            "comp_*.csv を読み込み、TRAIN_DATASET ごとに代表実験を選出し、"
             "代表実験テーブルと代表実験の箱ひげ図 (PNG) を出力するスクリプト"
         )
     )
@@ -100,9 +99,9 @@ def make_rep_boxplot(
     ylabel: str,
 ) -> None:
     """
-    (INPUT_MODE, IMG_SIZE) ごとの代表実験 (rep_df) に対して、
+    TRAIN_DATASET ごとの代表実験 (rep_df) に対して、
     元の df から該当実験の全サンプルの metric_col を取り出し、
-    代表 (INPUT_MODE × IMG_SIZE) ごとの誤差分布を箱ひげ図で描画して PNG 保存する。
+    代表expごとの誤差分布を箱ひげ図で描画して PNG 保存する。
 
     rep_df: 各行が 1つの代表実験
         必須列: TRAIN_DATASET, id_col, INPUT_MODE, IMG_SIZE
@@ -111,13 +110,13 @@ def make_rep_boxplot(
     labels = []
 
     for _, row in rep_df.iterrows():
-        train_dataset = row["TRAIN_DATASET"]
+        ds = row["TRAIN_DATASET"]
         exp_id = row[id_col]
         input_mode = row["INPUT_MODE"]
         img_size = row["IMG_SIZE"]
 
         mask = (
-            (df["TRAIN_DATASET"] == train_dataset)
+            (df["TRAIN_DATASET"] == ds)
             & (df[id_col] == exp_id)
             & (df["INPUT_MODE"] == input_mode)
             & (df["IMG_SIZE"] == img_size)
@@ -129,32 +128,14 @@ def make_rep_boxplot(
             # 対応するサンプルが無い場合はスキップ
             print(
                 f"⚠ WARN: No samples found for representative exp: "
-                f"TRAIN_DATASET={train_dataset}, {id_col}={exp_id}, "
+                f"TRAIN_DATASET={ds}, {id_col}={exp_id}, "
                 f"INPUT_MODE={input_mode}, IMG_SIZE={img_size}"
             )
             continue
 
         data.append(values)
-
-        # blur 情報があればラベルに加える（あくまで補足）
-        blur_info = ""
-        if "VALID_BLUR" in row and "VALID_BLUR_KERNEL" in row:
-            if bool(row["VALID_BLUR"]):
-                blur_info = f", blur={int(row['VALID_BLUR_KERNEL'])}"
-            else:
-                blur_info = ", blur=none"
-
-        color_info = ""
-        if "COLOR_MODE" in row and isinstance(row["COLOR_MODE"], str):
-            color_info = f", color={row['COLOR_MODE']}"
-
-        # ラベルは 2行構成
-        #  1行目: 入力モード × 画像サイズ
-        #  2行目: id と TRAIN_DATASET (＋ blur / color の補足)
-        label = (
-            f"{input_mode} × {img_size}\n"
-            f"{id_col}={exp_id}, ds={train_dataset}{color_info}{blur_info}"
-        )
+        # ラベルは 2行構成 (データセット名 / exp情報)
+        label = f"{ds}\n{id_col}={exp_id}"
         labels.append(label)
 
     n_reps = len(data)
@@ -176,7 +157,7 @@ def make_rep_boxplot(
 
     ax.set_title(title)
     ax.set_ylabel(ylabel)
-    ax.set_xlabel("INPUT_MODE × IMG_SIZE (Representative EXP)")
+    ax.set_xlabel("TRAIN_DATASET / Representative EXP")
 
     plt.setp(ax.get_xticklabels(), rotation=45, ha="right", fontsize=8)
 
@@ -215,51 +196,21 @@ def main():
             f"利用可能な列: {list(df.columns)}"
         )
 
-    # --- 必須列チェック（新しい comp_results に対応） ---
+    # 必須列チェック
     required_cols = ["INPUT_MODE", "IMG_SIZE", "TRAIN_DATASET_ROOT"]
     for col in required_cols:
         if col not in df.columns:
             raise ValueError(f"列 '{col}' が CSV に存在しません。")
 
-    # COLOR_MODE / VALID_DATASET_ROOT / BLUR 情報が無い古いCSVにも一応対応
-    if "COLOR_MODE" not in df.columns:
-        df["COLOR_MODE"] = "unknown"
-
-    if "VALID_DATASET_ROOT" not in df.columns:
-        # なければ TRAIN と同じものとしておく（古い形式の保険）
-        df["VALID_DATASET_ROOT"] = df["TRAIN_DATASET_ROOT"]
-
-    if "TRAIN_BLUR" not in df.columns:
-        df["TRAIN_BLUR"] = False
-    if "TRAIN_BLUR_KERNEL" not in df.columns:
-        df["TRAIN_BLUR_KERNEL"] = None
-
-    if "VALID_BLUR" not in df.columns:
-        df["VALID_BLUR"] = False
-    if "VALID_BLUR_KERNEL" not in df.columns:
-        df["VALID_BLUR_KERNEL"] = None
-
-    # TRAIN_DATASET_ROOT / VALID_DATASET_ROOT を短縮形 (最後のパス要素) にしておく
+    # TRAIN_DATASET_ROOT を短縮形 (最後のパス要素) にしておく
     df["TRAIN_DATASET"] = df["TRAIN_DATASET_ROOT"].astype(str).apply(
         lambda s: s.split("/")[-1].split("\\")[-1]
     )
-    df["VALID_DATASET"] = df["VALID_DATASET_ROOT"].astype(str).apply(
-        lambda s: s.split("/")[-1].split("\\")[-1]
-    )
 
     # -------------------------------------------------
-    # 1) 各 exp (TRAIN_DATASET, id, INPUT_MODE, IMG_SIZE, COLOR_MODE, VALID_DATASET, blur情報) ごとの mean / max / count
+    # 1) 各 exp (TRAIN_DATASET, id, INPUT_MODE, IMG_SIZE) ごとの mean / max / count
     # -------------------------------------------------
-    group_cols = [
-        "TRAIN_DATASET",
-        id_col,
-        "INPUT_MODE",
-        "IMG_SIZE",
-        "COLOR_MODE",
-        "VALID_DATASET",
-        "VALID_BLUR",
-        "VALID_BLUR_KERNEL",
-    ]
+    group_cols = ["TRAIN_DATASET", id_col, "INPUT_MODE", "IMG_SIZE"]
     exp_stats = (
         df.groupby(group_cols)[metric_col]
         .agg(["mean", "max", "count"])
@@ -277,97 +228,79 @@ def main():
         prefix = csv_path.with_suffix("")
 
     # -------------------------------------------------
-    # 2) (INPUT_MODE, IMG_SIZE) ごとに代表実験を選ぶ (mean ベース)
-    #    - 同じ (INPUT_MODE, IMG_SIZE) 内で mean → max の順にソート
+    # 2) TRAIN_DATASET ごとに代表実験を選ぶ (mean ベース)
+    #    - 同じ TRAIN_DATASET 内で mean → max の順にソートしてから groupby.first()
     #    - mean が同値の場合は max が小さいほうを優先
     # -------------------------------------------------
     exp_sorted_by_mean = exp_stats.sort_values(
-        by=["INPUT_MODE", "IMG_SIZE", "mean", "max"],
-        ascending=[True, True, True, True],
+        by=["TRAIN_DATASET", "mean", "max"],
+        ascending=[True, True, True],
     )
     rep_by_mean = (
         exp_sorted_by_mean
-        .groupby(["INPUT_MODE", "IMG_SIZE"], as_index=False)
+        .groupby("TRAIN_DATASET", as_index=False)
         .first()
     )
 
-    # (INPUT_MODE, IMG_SIZE) 組の中で mean 昇順に並べ替え & rank 付与
+    # データセット間で mean 昇順に並べ替え & rank 付与
     rep_by_mean = rep_by_mean.sort_values("mean", ascending=True).reset_index(drop=True)
     rep_by_mean.insert(0, "rank", range(1, len(rep_by_mean) + 1))
 
     cols_mean = [
         "rank",
+        "TRAIN_DATASET",
+        id_col,
         "INPUT_MODE",
         "IMG_SIZE",
-        "COLOR_MODE",
-        id_col,
-        "TRAIN_DATASET",
-        "VALID_DATASET",
-        "VALID_BLUR",
-        "VALID_BLUR_KERNEL",
         "mean",
         "max",
         "count",
     ]
     rep_by_mean_table = rep_by_mean[cols_mean]
 
-    out_mean_png = prefix.with_name(
-        prefix.name + f"_{metric_col}_rep_by_mean_inputmode_imgsize.png"
-    )
+    out_mean_png = prefix.with_name(prefix.name + f"_{metric_col}_dataset_rep_by_mean.png")
     make_table_png(
         rep_by_mean_table,
         out_mean_png,
-        title=(
-            f"Representative by Mean {metric_col} per (INPUT_MODE, IMG_SIZE) "
-            f"(Lower is Better)"
-        ),
+        title=f"Dataset Representative by Mean {metric_col} (Lower is Better)"
     )
 
     # -------------------------------------------------
-    # 3) (INPUT_MODE, IMG_SIZE) ごとに代表実験を選ぶ (max ベース)
-    #    - 同じ (INPUT_MODE, IMG_SIZE) 内で max → mean の順にソート
+    # 3) TRAIN_DATASET ごとに代表実験を選ぶ (max ベース)
+    #    - 同じ TRAIN_DATASET 内で max → mean の順にソートしてから groupby.first()
     #    - max が同値の場合は mean が小さいほうを優先
     # -------------------------------------------------
     exp_sorted_by_max = exp_stats.sort_values(
-        by=["INPUT_MODE", "IMG_SIZE", "max", "mean"],
-        ascending=[True, True, True, True],
+        by=["TRAIN_DATASET", "max", "mean"],
+        ascending=[True, True, True],
     )
     rep_by_max = (
         exp_sorted_by_max
-        .groupby(["INPUT_MODE", "IMG_SIZE"], as_index=False)
+        .groupby("TRAIN_DATASET", as_index=False)
         .first()
     )
 
-    # (INPUT_MODE, IMG_SIZE) 組の中で max 昇順に並べ替え & rank 付与
+    # データセット間で max 昇順に並べ替え & rank 付与
     rep_by_max = rep_by_max.sort_values("max", ascending=True).reset_index(drop=True)
     rep_by_max.insert(0, "rank", range(1, len(rep_by_max) + 1))
 
     cols_max = [
         "rank",
+        "TRAIN_DATASET",
+        id_col,
         "INPUT_MODE",
         "IMG_SIZE",
-        "COLOR_MODE",
-        id_col,
-        "TRAIN_DATASET",
-        "VALID_DATASET",
-        "VALID_BLUR",
-        "VALID_BLUR_KERNEL",
         "mean",
         "max",
         "count",
     ]
     rep_by_max_table = rep_by_max[cols_max]
 
-    out_max_png = prefix.with_name(
-        prefix.name + f"_{metric_col}_rep_by_max_inputmode_imgsize.png"
-    )
+    out_max_png = prefix.with_name(prefix.name + f"_{metric_col}_dataset_rep_by_max.png")
     make_table_png(
         rep_by_max_table,
         out_max_png,
-        title=(
-            f"Representative by Max {metric_col} per (INPUT_MODE, IMG_SIZE) "
-            f"(Lower is Better)"
-        ),
+        title=f"Dataset Representative by Max {metric_col} (Lower is Better)"
     )
 
     # -------------------------------------------------
@@ -377,36 +310,28 @@ def main():
     #    どちらも元の df からサンプルを拾って箱ひげ図を作る
     # -------------------------------------------------
     # mean代表
-    rep_mean_for_box = rep_by_mean[
-        ["TRAIN_DATASET", id_col, "INPUT_MODE", "IMG_SIZE", "COLOR_MODE", "VALID_BLUR", "VALID_BLUR_KERNEL"]
-    ].copy()
-    out_box_mean = prefix.with_name(
-        prefix.name + f"_{metric_col}_rep_by_mean_boxplot_inputmode_imgsize.png"
-    )
+    rep_mean_for_box = rep_by_mean[["TRAIN_DATASET", id_col, "INPUT_MODE", "IMG_SIZE"]].copy()
+    out_box_mean = prefix.with_name(prefix.name + f"_{metric_col}_rep_by_mean_boxplot.png")
     make_rep_boxplot(
         df=df,
         rep_df=rep_mean_for_box,
         id_col=id_col,
         metric_col=metric_col,
         out_path=out_box_mean,
-        title=f"Representative per (INPUT_MODE, IMG_SIZE) (by Mean {metric_col})",
+        title=f"Representative EXP per TRAIN_DATASET (by Mean {metric_col})",
         ylabel=f"{metric_col} (lower is better)",
     )
 
     # max代表
-    rep_max_for_box = rep_by_max[
-        ["TRAIN_DATASET", id_col, "INPUT_MODE", "IMG_SIZE", "COLOR_MODE", "VALID_BLUR", "VALID_BLUR_KERNEL"]
-    ].copy()
-    out_box_max = prefix.with_name(
-        prefix.name + f"_{metric_col}_rep_by_max_boxplot_inputmode_imgsize.png"
-    )
+    rep_max_for_box = rep_by_max[["TRAIN_DATASET", id_col, "INPUT_MODE", "IMG_SIZE"]].copy()
+    out_box_max = prefix.with_name(prefix.name + f"_{metric_col}_rep_by_max_boxplot.png")
     make_rep_boxplot(
         df=df,
         rep_df=rep_max_for_box,
         id_col=id_col,
         metric_col=metric_col,
         out_path=out_box_max,
-        title=f"Representative per (INPUT_MODE, IMG_SIZE) (by Max {metric_col})",
+        title=f"Representative EXP per TRAIN_DATASET (by Max {metric_col})",
         ylabel=f"{metric_col} (lower is better)",
     )
 

@@ -1,0 +1,360 @@
+#!/usr/bin/env python3
+
+# scripts/datasets_converter.py
+#
+# 概要:
+# - 入力: 元データセット (例: datasets/type-08/raw/...)
+# - 出力: 新データセット (例: datasets/type-08_lab, datasets/type-08_lab_blur_3)
+# - 出力先には raw/ は作らず、cache/ 以下のみを生成する
+# - 処理内容:
+#     * BGR画像を読み込み
+#     * （オプション）Gaussian ブラーを適用
+#     * Lab 変換 → L チャンネルを gray として使用
+#     * gray を 4値化して bin4 を生成
+#     * 各サイズ (56, 112, 224) に対してアスペクト比を保ちつつ正方形リサイズ
+#       - デフォルトのリサイズは INTER_AREA
+#       - maxpool を選択した場合は自前の max_pool_resize を使用
+#     * 出力:
+#         dst_dataset_dir/cache/rgb/sz{sz}_{resize_mode}/{split}/imgs/*.png
+#         dst_dataset_dir/cache/gray/sz{sz}_{resize_mode}/{split}/imgs/*.png
+#         dst_dataset_dir/cache/bin4/sz{sz}_{resize_mode}/{split}/imgs/*.png
+#     * labels.csv は src の raw から dst の各チャンネル/サイズ配下へコピー
+
+import argparse
+from pathlib import Path
+import shutil
+
+import cv2
+import numpy as np
+from tqdm import tqdm
+
+
+SIZES    = [56, 112, 224]
+CHANNELS = ["rgb", "gray", "bin4"]
+IMG_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+
+INTERPOLATION_MAP = {
+    "nearest": cv2.INTER_NEAREST,
+    "linear":  cv2.INTER_LINEAR,
+    "area":    cv2.INTER_AREA,
+    "cubic":   cv2.INTER_CUBIC,
+    "lanczos": cv2.INTER_LANCZOS4,
+}
+
+
+def max_pool_resize(img: np.ndarray, target_size: tuple[int, int]) -> np.ndarray:
+    """Max pooling によるリサイズ（縮小専用）。
+    target_size: (th, tw)
+    """
+    h, w = img.shape[:2]
+    th, tw = target_size
+
+    # スケールファクタ
+    scale_h, scale_w = th / h, tw / w
+
+    # 拡大の場合は通常の補間（最近傍）を使用
+    if scale_h >= 1.0 and scale_w >= 1.0:
+        return cv2.resize(img, (tw, th), interpolation=cv2.INTER_NEAREST)
+
+    # 縮小の場合のみ max pooling
+    pool_h = max(1, int(h / th))
+    pool_w = max(1, int(w / tw))
+
+    out_h = h // pool_h
+    out_w = w // pool_w
+
+    if img.ndim == 2:
+        # グレースケール
+        pooled = np.zeros((out_h, out_w), dtype=img.dtype)
+        for i in range(out_h):
+            for j in range(out_w):
+                region = img[i*pool_h:(i+1)*pool_h, j*pool_w:(j+1)*pool_w]
+                pooled[i, j] = np.max(region)
+    else:
+        # カラー
+        pooled = np.zeros((out_h, out_w, img.shape[2]), dtype=img.dtype)
+        for i in range(out_h):
+            for j in range(out_w):
+                region = img[i*pool_h:(i+1)*pool_h, j*pool_w:(j+1)*pool_w]
+                pooled[i, j] = np.max(region, axis=(0, 1))
+
+    # 目標サイズと異なる場合は最終調整
+    if (out_h, out_w) != (th, tw):
+        pooled = cv2.resize(pooled, (tw, th), interpolation=cv2.INTER_NEAREST)
+
+    return pooled
+
+
+def resize_square(img: np.ndarray, size: int, method: str) -> np.ndarray:
+    """アスペクト比を保持して正方形にリサイズし、中央に配置する。
+
+    - size: 出力の一辺の長さ (56, 112, 224 など)
+    - method: "nearest", "linear", "area", "cubic", "lanczos", "maxpool"
+    """
+    h, w = img.shape[:2]
+    is_grayscale = img.ndim == 2
+
+    # 既に正方形で目標サイズと同じ場合はそのまま返す
+    if h == w == size:
+        return img
+
+    # 正方形
+    if h == w:
+        if method == "maxpool":
+            resized = max_pool_resize(img, (size, size))
+        else:
+            interpolation = INTERPOLATION_MAP[method]
+            resized = cv2.resize(img, (size, size), interpolation=interpolation)
+        return resized
+
+    # 長方形: 長辺を size に合わせてスケーリング
+    scale = size / max(h, w)
+    nh, nw = int(round(h * scale)), int(round(w * scale))
+
+    if method == "maxpool":
+        resized = max_pool_resize(img, (nh, nw))
+    else:
+        interpolation = INTERPOLATION_MAP[method]
+        resized = cv2.resize(img, (nw, nh), interpolation=interpolation)
+
+    actual_h, actual_w = resized.shape[:2]
+
+    # 正方形キャンバスを作成（元画像の次元に合わせる）
+    if is_grayscale:
+        canvas = np.zeros((size, size), dtype=img.dtype)
+    else:
+        canvas = np.zeros((size, size, img.shape[2]), dtype=img.dtype)
+
+    # 中央配置の座標計算
+    y0 = (size - actual_h) // 2
+    x0 = (size - actual_w) // 2
+
+    y1 = min(y0 + actual_h, size)
+    x1 = min(x0 + actual_w, size)
+    actual_h = y1 - y0
+    actual_w = x1 - x0
+
+    canvas[y0:y1, x0:x1] = resized[:actual_h, :actual_w]
+
+    return canvas
+
+
+def to_gray(img_bgr: np.ndarray) -> np.ndarray:
+    """BGR画像をLab変換し、Lチャンネル（輝度）を返す。"""
+    lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2Lab)
+    return lab[:, :, 0]
+
+
+def to_bin4(gray: np.ndarray) -> np.ndarray:
+    """Lチャンネル画像（0-255）を4値化して 0, 85, 170, 255 にする。"""
+    return (np.digitize(gray, [10, 30, 120], right=False) * 85).astype(np.uint8)
+
+
+def save_if_not_exists(img: np.ndarray, path: Path) -> None:
+    """ファイルが存在しない場合のみ保存する。"""
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(path), img)
+
+
+def apply_gaussian_blur_if_needed(img_bgr: np.ndarray, blur: bool, kernel_size: int) -> np.ndarray:
+    """blur フラグとカーネルサイズに応じて GaussianBlur を適用。"""
+    if not blur:
+        return img_bgr
+
+    k = int(kernel_size)
+    if k < 1:
+        k = 1
+    if k % 2 == 0:
+        k += 1  # 偶数の場合は次の奇数に丸める
+
+    return cv2.GaussianBlur(img_bgr, (k, k), sigmaX=0)
+
+
+def process_image(
+    path: Path,
+    dst_cache_root: Path,
+    resize_mode: str,
+    blur: bool,
+    blur_kernel: int,
+) -> None:
+    """単一画像の処理。
+
+    - path: src_dataset_dir/raw/... にある画像
+    - dst_cache_root: dst_dataset_dir/cache
+    """
+    img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    if img is None:
+        print(f"[WARN] 読み込み失敗: {path}")
+        return
+
+    # パスから split(train/valid) を推定 (…/raw/train/imgs/xxx.png を想定)
+    parts = path.parts
+    if len(parts) < 3:
+        print(f"[SKIP] パス構造が想定外: {path}")
+        return
+
+    split = parts[-3]
+    if split not in {"train", "valid"}:
+        print(f"[SKIP] train/valid 以外: {path}")
+        return
+
+    stem = path.stem
+
+    # --- ブラーを適用（必要なら） ---
+    img_bgr = apply_gaussian_blur_if_needed(img, blur=blur, kernel_size=blur_kernel)
+
+    # --- Lab-L グレイスケール ＆ 4値化 ---
+    gray = to_gray(img_bgr)
+    bin4 = to_bin4(gray)
+
+    # --- 各サイズ × 各チャンネルで保存 ---
+    for sz in SIZES:
+        postfix = f"sz{sz}_{resize_mode}"
+
+        # RGB
+        base_rgb = dst_cache_root / "rgb" / postfix / split / "imgs"
+        out_path_rgb = base_rgb / f"{stem}.png"
+        resized_rgb = resize_square(img_bgr, sz, resize_mode)
+        save_if_not_exists(resized_rgb, out_path_rgb)
+
+        # Grayscale (Lab-L)
+        base_gray = dst_cache_root / "gray" / postfix / split / "imgs"
+        out_path_gray = base_gray / f"{stem}.png"
+        resized_gray = resize_square(gray, sz, resize_mode)
+        resized_gray_bgr = cv2.cvtColor(resized_gray, cv2.COLOR_GRAY2BGR)
+        save_if_not_exists(resized_gray_bgr, out_path_gray)
+
+        # Binary 4-level
+        base_bin4 = dst_cache_root / "bin4" / postfix / split / "imgs"
+        out_path_bin4 = base_bin4 / f"{stem}.png"
+        resized_bin4 = resize_square(bin4, sz, resize_mode)
+        resized_bin4_bgr = cv2.cvtColor(resized_bin4, cv2.COLOR_GRAY2BGR)
+        save_if_not_exists(resized_bin4_bgr, out_path_bin4)
+
+
+def copy_labels(src_raw_root: Path, dst_cache_root: Path, resize_mode: str) -> None:
+    """ラベルファイル (labels.csv) を src の raw から dst の cache 側にコピーする。"""
+    for split in ("train", "valid"):
+        src = src_raw_root / split / "labels.csv"
+        if not src.exists():
+            print(f"[WARN] labels.csv が見つかりません: {src}")
+            continue
+
+        for sz in SIZES:
+            postfix = f"sz{sz}_{resize_mode}"
+            for ch in CHANNELS:
+                dst_dir = dst_cache_root / ch / postfix / split
+                dst_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst_dir / "labels.csv")
+
+
+def convert(
+    src_dataset_dir: Path,
+    dst_dataset_dir: Path,
+    resize_mode: str,
+    blur: bool,
+    blur_kernel: int,
+) -> None:
+    """メイン変換処理。
+
+    - src_dataset_dir: 元データセット (例: datasets/type-08)
+    - dst_dataset_dir: 出力データセット (例: datasets/type-08_lab_blur_3)
+    """
+    src_raw_root = src_dataset_dir / "raw"
+    if not src_raw_root.exists():
+        raise FileNotFoundError(f"raw フォルダが見つかりません: {src_raw_root}")
+
+    dst_cache_root = dst_dataset_dir / "cache"
+
+    imgs = [p for p in src_raw_root.rglob("*") if p.suffix.lower() in IMG_EXTS]
+
+    print(f"[INFO] 入力データセット: {src_dataset_dir}")
+    print(f"[INFO] 出力データセット: {dst_dataset_dir}")
+    print(f"[INFO] 対象画像枚数: {len(imgs)}")
+    print(f"[INFO] resize_mode = {resize_mode}, blur = {blur}, blur_kernel = {blur_kernel}")
+
+    for p in tqdm(imgs, desc=f"Converting ({resize_mode})"):
+        process_image(
+            path=p,
+            dst_cache_root=dst_cache_root,
+            resize_mode=resize_mode,
+            blur=blur,
+            blur_kernel=blur_kernel,
+        )
+
+    copy_labels(src_raw_root, dst_cache_root, resize_mode)
+    print("✅ 完了")
+
+
+def parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(
+        description=(
+            "raw 画像 (Lab-L + bin4 対応) を rgb/gray/bin4 caches に変換するスクリプト。\n"
+            "入力データセット (例: datasets/type-08) の raw/ を読み込み、"
+            "出力データセット (例: datasets/type-08_lab, datasets/type-08_lab_blur_3) に cache/ を生成する。"
+        )
+    )
+    ap.add_argument(
+        "--dataset_dir",
+        type=Path,
+        required=True,
+        help="元データセットのディレクトリ (例: datasets/type-08)",
+    )
+    ap.add_argument(
+        "--out_dataset_dir",
+        type=Path,
+        default=None,
+        help=(
+            "出力データセットのディレクトリ (任意)。"
+            "指定しない場合は、元の名前に '_lab' および '_blur_<k>' を付けたものを自動生成する。"
+        ),
+    )
+    ap.add_argument(
+        "--resize-mode",
+        type=str,
+        default="area",
+        choices=["nearest", "linear", "area", "cubic", "lanczos", "maxpool"],
+        help="リサイズ手法（default: area / INTER_AREA）",
+    )
+    ap.add_argument(
+        "--blur",
+        action="store_true",
+        help="Gaussian ブラーを適用する場合に指定。",
+    )
+    ap.add_argument(
+        "--blur-kernel",
+        type=int,
+        default=3,
+        help="Gaussian ブラーのカーネルサイズ (奇数推奨, default: 3)。",
+    )
+    return ap.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+
+    src_dataset_dir = args.dataset_dir.resolve()
+
+    if args.out_dataset_dir is not None:
+        dst_dataset_dir = args.out_dataset_dir.resolve()
+    else:
+        # 自動で type-XX_lab / type-XX_lab_blur_k を決める
+        base_name = src_dataset_dir.name
+        suffix = "_lab"
+        if args.blur:
+            suffix += f"_blur_{args.blur_kernel}"
+        dst_dataset_dir = src_dataset_dir.parent / f"{base_name}{suffix}"
+
+    convert(
+        src_dataset_dir=src_dataset_dir,
+        dst_dataset_dir=dst_dataset_dir,
+        resize_mode=args.resize_mode,
+        blur=args.blur,
+        blur_kernel=args.blur_kernel,
+    )
+
+
+if __name__ == "__main__":
+    main()
