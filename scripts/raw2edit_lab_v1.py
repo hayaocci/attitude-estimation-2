@@ -19,10 +19,17 @@
 #         dst_dataset_dir/cache/gray/sz{sz}_{resize_mode}/{split}/imgs/*.png
 #         dst_dataset_dir/cache/bin4/sz{sz}_{resize_mode}/{split}/imgs/*.png
 #     * labels.csv は src の raw から dst の各チャンネル/サイズ配下へコピー
+#
+# - 追加機能:
+#     * --outputs で出力する (channel, size) の組み合わせを指定可能
+#       例: --outputs rgb224 gray112
+#       → rgb×224 と gray×112 のみ出力
+#       未指定の場合は全9通りを出力
 
 import argparse
 from pathlib import Path
 import shutil
+from typing import Optional, Set, Tuple
 
 import cv2
 import numpy as np
@@ -178,11 +185,14 @@ def process_image(
     resize_mode: str,
     blur: bool,
     blur_kernel: int,
+    outputs_filter: Optional[Set[Tuple[str, int]]],
 ) -> None:
     """単一画像の処理。
 
     - path: src_dataset_dir/raw/... にある画像
     - dst_cache_root: dst_dataset_dir/cache
+    - outputs_filter: None の場合は全組み合わせ、
+                      それ以外は (channel, size) のセットでフィルタ
     """
     img = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if img is None:
@@ -214,28 +224,40 @@ def process_image(
         postfix = f"sz{sz}_{resize_mode}"
 
         # RGB
-        base_rgb = dst_cache_root / "rgb" / postfix / split / "imgs"
-        out_path_rgb = base_rgb / f"{stem}.png"
-        resized_rgb = resize_square(img_bgr, sz, resize_mode)
-        save_if_not_exists(resized_rgb, out_path_rgb)
+        if outputs_filter is None or ("rgb", sz) in outputs_filter:
+            base_rgb = dst_cache_root / "rgb" / postfix / split / "imgs"
+            out_path_rgb = base_rgb / f"{stem}.png"
+            resized_rgb = resize_square(img_bgr, sz, resize_mode)
+            save_if_not_exists(resized_rgb, out_path_rgb)
 
         # Grayscale (Lab-L)
-        base_gray = dst_cache_root / "gray" / postfix / split / "imgs"
-        out_path_gray = base_gray / f"{stem}.png"
-        resized_gray = resize_square(gray, sz, resize_mode)
-        resized_gray_bgr = cv2.cvtColor(resized_gray, cv2.COLOR_GRAY2BGR)
-        save_if_not_exists(resized_gray_bgr, out_path_gray)
+        if outputs_filter is None or ("gray", sz) in outputs_filter:
+            base_gray = dst_cache_root / "gray" / postfix / split / "imgs"
+            out_path_gray = base_gray / f"{stem}.png"
+            resized_gray = resize_square(gray, sz, resize_mode)
+            resized_gray_bgr = cv2.cvtColor(resized_gray, cv2.COLOR_GRAY2BGR)
+            save_if_not_exists(resized_gray_bgr, out_path_gray)
 
         # Binary 4-level
-        base_bin4 = dst_cache_root / "bin4" / postfix / split / "imgs"
-        out_path_bin4 = base_bin4 / f"{stem}.png"
-        resized_bin4 = resize_square(bin4, sz, resize_mode)
-        resized_bin4_bgr = cv2.cvtColor(resized_bin4, cv2.COLOR_GRAY2BGR)
-        save_if_not_exists(resized_bin4_bgr, out_path_bin4)
+        if outputs_filter is None or ("bin4", sz) in outputs_filter:
+            base_bin4 = dst_cache_root / "bin4" / postfix / split / "imgs"
+            out_path_bin4 = base_bin4 / f"{stem}.png"
+            resized_bin4 = resize_square(bin4, sz, resize_mode)
+            resized_bin4_bgr = cv2.cvtColor(resized_bin4, cv2.COLOR_GRAY2BGR)
+            save_if_not_exists(resized_bin4_bgr, out_path_bin4)
 
 
-def copy_labels(src_raw_root: Path, dst_cache_root: Path, resize_mode: str) -> None:
-    """ラベルファイル (labels.csv) を src の raw から dst の cache 側にコピーする。"""
+def copy_labels(
+    src_raw_root: Path,
+    dst_cache_root: Path,
+    resize_mode: str,
+    outputs_filter: Optional[Set[Tuple[str, int]]],
+) -> None:
+    """ラベルファイル (labels.csv) を src の raw から dst の cache 側にコピーする。
+
+    outputs_filter が指定されている場合は、その (channel, size) の組み合わせに
+    対応するディレクトリにのみコピーする。
+    """
     for split in ("train", "valid"):
         src = src_raw_root / split / "labels.csv"
         if not src.exists():
@@ -245,6 +267,8 @@ def copy_labels(src_raw_root: Path, dst_cache_root: Path, resize_mode: str) -> N
         for sz in SIZES:
             postfix = f"sz{sz}_{resize_mode}"
             for ch in CHANNELS:
+                if outputs_filter is not None and (ch, sz) not in outputs_filter:
+                    continue
                 dst_dir = dst_cache_root / ch / postfix / split
                 dst_dir.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dst_dir / "labels.csv")
@@ -256,6 +280,7 @@ def convert(
     resize_mode: str,
     blur: bool,
     blur_kernel: int,
+    outputs_filter: Optional[Set[Tuple[str, int]]],
 ) -> None:
     """メイン変換処理。
 
@@ -275,6 +300,14 @@ def convert(
     print(f"[INFO] 対象画像枚数: {len(imgs)}")
     print(f"[INFO] resize_mode = {resize_mode}, blur = {blur}, blur_kernel = {blur_kernel}")
 
+    if outputs_filter is None:
+        print("[INFO] 出力組み合わせ: 全チャンネル・全サイズ (rgb/gray/bin4 × 56/112/224)")
+    else:
+        combos_str = ", ".join(
+            f"{ch}{sz}" for ch, sz in sorted(outputs_filter, key=lambda x: (CHANNELS.index(x[0]), x[1]))
+        )
+        print(f"[INFO] 出力組み合わせ (フィルタ): {combos_str}")
+
     for p in tqdm(imgs, desc=f"Converting ({resize_mode})"):
         process_image(
             path=p,
@@ -282,10 +315,63 @@ def convert(
             resize_mode=resize_mode,
             blur=blur,
             blur_kernel=blur_kernel,
+            outputs_filter=outputs_filter,
         )
 
-    copy_labels(src_raw_root, dst_cache_root, resize_mode)
+    copy_labels(src_raw_root, dst_cache_root, resize_mode, outputs_filter)
     print("✅ 完了")
+
+
+def parse_outputs(outputs_list: Optional[list[str]]) -> Optional[Set[Tuple[str, int]]]:
+    """--outputs で指定された文字列から (channel, size) のセットを作る。
+
+    例:
+        ["rgb224", "gray112"] -> {("rgb", 224), ("gray", 112)}
+
+    未指定 (None や空リスト) の場合は None を返し、
+    その場合は全組み合わせを出力する。
+    """
+    if not outputs_list:
+        return None
+
+    allowed: Set[Tuple[str, int]] = set()
+
+    for token in outputs_list:
+        token = token.strip()
+        if not token:
+            continue
+
+        if token.startswith("rgb"):
+            ch = "rgb"
+            size_str = token[3:]
+        elif token.startswith("gray"):
+            ch = "gray"
+            size_str = token[4:]
+        elif token.startswith("bin4"):
+            ch = "bin4"
+            size_str = token[4:]
+        else:
+            raise ValueError(
+                f"--outputs の指定が不正です: '{token}' "
+                f"(先頭は rgb / gray / bin4 のいずれかにしてください)"
+            )
+
+        if not size_str.isdigit():
+            raise ValueError(f"--outputs のサイズ指定が不正です: '{token}'")
+
+        size = int(size_str)
+        if size not in SIZES:
+            raise ValueError(
+                f"--outputs で指定されたサイズがサポート外です: '{token}' "
+                f"(許可サイズ: {SIZES})"
+            )
+
+        allowed.add((ch, size))
+
+    if not allowed:
+        return None
+
+    return allowed
 
 
 def parse_args() -> argparse.Namespace:
@@ -329,6 +415,17 @@ def parse_args() -> argparse.Namespace:
         default=3,
         help="Gaussian ブラーのカーネルサイズ (奇数推奨, default: 3)。",
     )
+    ap.add_argument(
+        "--outputs",
+        nargs="*",
+        default=None,
+        metavar="CHSZ",
+        help=(
+            "出力する (channel, size) の組み合わせを指定します。"
+            "例: --outputs rgb224 gray112 bin456\n"
+            "未指定の場合は rgb/gray/bin4 × 56/112/224 の全組み合わせを出力します。"
+        ),
+    )
     return ap.parse_args()
 
 
@@ -347,12 +444,15 @@ def main() -> None:
             suffix += f"_blur_{args.blur_kernel}"
         dst_dataset_dir = src_dataset_dir.parent / f"{base_name}{suffix}"
 
+    outputs_filter = parse_outputs(args.outputs)
+
     convert(
         src_dataset_dir=src_dataset_dir,
         dst_dataset_dir=dst_dataset_dir,
         resize_mode=args.resize_mode,
         blur=args.blur,
         blur_kernel=args.blur_kernel,
+        outputs_filter=outputs_filter,
     )
 
 
