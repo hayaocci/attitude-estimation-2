@@ -1,35 +1,10 @@
-#!/usr/bin/env python3
-
-# scripts/datasets_converter.py
-#
-# 概要:
-# - 入力: 元データセット (例: datasets/type-08/raw/...)
-# - 出力: 新データセット (例: datasets/type-08_lab, datasets/type-08_lab_blur_3)
-# - 出力先には raw/ は作らず、cache/ 以下のみを生成する
-# - 処理内容:
-#     * BGR画像を読み込み
-#     * （オプション）Gaussian ブラーを適用
-#     * Lab 変換 → L チャンネルを gray として使用
-#     * gray を 4値化して bin4 を生成
-#     * 各サイズ (56, 112, 224) に対してアスペクト比を保ちつつ正方形リサイズ
-#       - デフォルトのリサイズは INTER_AREA
-#       - maxpool を選択した場合は自前の max_pool_resize を使用
-#     * 出力:
-#         dst_dataset_dir/cache/rgb/sz{sz}_{resize_mode}/{split}/imgs/*.png
-#         dst_dataset_dir/cache/gray/sz{sz}_{resize_mode}/{split}/imgs/*.png
-#         dst_dataset_dir/cache/bin4/sz{sz}_{resize_mode}/{split}/imgs/*.png
-#     * labels.csv は src の raw から dst の各チャンネル/サイズ配下へコピー
-#
-# - 追加機能:
-#     * --outputs で出力する (channel, size) の組み合わせを指定可能
-#       例: --outputs rgb224 gray112
-#       → rgb×224 と gray×112 のみ出力
-#       未指定の場合は全9通りを出力
-
 import argparse
 from pathlib import Path
 import shutil
 from typing import Optional, Set, Tuple
+import os
+from functools import partial
+from concurrent.futures import ProcessPoolExecutor
 
 import cv2
 import numpy as np
@@ -281,11 +256,13 @@ def convert(
     blur: bool,
     blur_kernel: int,
     outputs_filter: Optional[Set[Tuple[str, int]]],
+    num_workers: int,
 ) -> None:
     """メイン変換処理。
 
     - src_dataset_dir: 元データセット (例: datasets/type-08)
     - dst_dataset_dir: 出力データセット (例: datasets/type-08_lab_blur_3)
+    - num_workers: 並列処理に使用するプロセス数
     """
     src_raw_root = src_dataset_dir / "raw"
     if not src_raw_root.exists():
@@ -299,6 +276,7 @@ def convert(
     print(f"[INFO] 出力データセット: {dst_dataset_dir}")
     print(f"[INFO] 対象画像枚数: {len(imgs)}")
     print(f"[INFO] resize_mode = {resize_mode}, blur = {blur}, blur_kernel = {blur_kernel}")
+    print(f"[INFO] num_workers = {num_workers}")
 
     if outputs_filter is None:
         print("[INFO] 出力組み合わせ: 全チャンネル・全サイズ (rgb/gray/bin4 × 56/112/224)")
@@ -308,16 +286,37 @@ def convert(
         )
         print(f"[INFO] 出力組み合わせ (フィルタ): {combos_str}")
 
-    for p in tqdm(imgs, desc=f"Converting ({resize_mode})"):
-        process_image(
-            path=p,
-            dst_cache_root=dst_cache_root,
-            resize_mode=resize_mode,
-            blur=blur,
-            blur_kernel=blur_kernel,
-            outputs_filter=outputs_filter,
-        )
+    if len(imgs) == 0:
+        print("[WARN] 対象画像が見つかりませんでした。何も処理せず終了します。")
+        return
 
+    # 並列実行のための部分適用
+    worker = partial(
+        process_image,
+        dst_cache_root=dst_cache_root,
+        resize_mode=resize_mode,
+        blur=blur,
+        blur_kernel=blur_kernel,
+        outputs_filter=outputs_filter,
+    )
+
+    if num_workers <= 1:
+        # シングルプロセスで逐次処理
+        for p in tqdm(imgs, desc=f"Converting ({resize_mode})"):
+            worker(p)
+    else:
+        # マルチプロセスで並列処理
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            # executor.map を tqdm でラップして進捗表示
+            list(
+                tqdm(
+                    executor.map(worker, imgs, chunksize=10),
+                    total=len(imgs),
+                    desc=f"Converting ({resize_mode})",
+                )
+            )
+
+    # labels.csv のコピーは最後に1回だけメインプロセスで実施
     copy_labels(src_raw_root, dst_cache_root, resize_mode, outputs_filter)
     print("✅ 完了")
 
@@ -426,6 +425,15 @@ def parse_args() -> argparse.Namespace:
             "未指定の場合は rgb/gray/bin4 × 56/112/224 の全組み合わせを出力します。"
         ),
     )
+    ap.add_argument(
+        "--num-workers",
+        type=int,
+        default=None,
+        help=(
+            "並列処理に使用するプロセス数 (default: CPUコア数)。"
+            "1 を指定するとシングルプロセスで実行します。"
+        ),
+    )
     return ap.parse_args()
 
 
@@ -446,6 +454,12 @@ def main() -> None:
 
     outputs_filter = parse_outputs(args.outputs)
 
+    # num_workers が指定されていなければ CPU コア数を使用
+    if args.num_workers is None or args.num_workers <= 0:
+        num_workers = os.cpu_count() or 1
+    else:
+        num_workers = args.num_workers
+
     convert(
         src_dataset_dir=src_dataset_dir,
         dst_dataset_dir=dst_dataset_dir,
@@ -453,6 +467,7 @@ def main() -> None:
         blur=args.blur,
         blur_kernel=args.blur_kernel,
         outputs_filter=outputs_filter,
+        num_workers=num_workers,
     )
 
 

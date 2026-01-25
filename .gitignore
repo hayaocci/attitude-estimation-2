@@ -22,6 +22,16 @@ config_lab_ch01.yaml
 config_lab_ch03.yaml
 config_lab_v1.yaml
 config_lab_kensho3.yaml
+config_lab_kensho3-v1.yaml
+config_lab_kensho3-v2.yaml
+config_lab_kensho3-v3.yaml
+config_lab_kensho3-v4.yaml
+config_lab_kensho3-v5.yaml
+config_lab_kensho3-v6.yaml
+config_lab_kensho3-v7.yaml
+config_lab_kensho3-v8.yaml
+config_lab_kensho3-v9.yaml
+config_lab_kensho3-v10.yaml
 lab_logs_old
 config_color.yaml
 c123_logs/

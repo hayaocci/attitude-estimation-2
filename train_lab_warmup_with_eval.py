@@ -10,14 +10,32 @@ Features:
 - Pretrained model loading toggle.
 - Simplified log directory: lab_logs/{id}
 - Real-time progress tracking with tqdm.
-- [NEW] Linear LR warmup + CosineAnnealingLR scheduler
+- Linear LR warmup + CosineAnnealingLR scheduler
   (WARMUP_EPOCHS in config, default=5).
+
+[NEW]
+- 2-2 / 2-3:
+  * For every epoch & every validation set, log:
+      - p95, max, median, IQR, trimmed-MAE (per absolute error)
+  * After training, plot epoch-wise curves of these metrics
+    (x-axis=epoch, y-axis=metric), per metric with all Val sets overlaid.
+
+- 2-1:
+  * After training, ALWAYS perform detailed evaluation for:
+      - best.pth
+      - latest.pth
+    on ALL validation sets.
+  * For each (checkpoint, Val#k), output:
+      - per-sample CSV
+      - error histogram
+      - true vs pred scatter
+      - error vs true scatter
 """
 from __future__ import annotations
 
 import argparse, math, random, sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -60,6 +78,60 @@ def circular_error(pred_deg: torch.Tensor, true_deg: torch.Tensor):
     """角度の環状性(0=360)を考慮した絶対誤差を計算"""
     diff = (pred_deg - true_deg + 180.0) % 360.0 - 180.0
     return diff.abs()
+
+def compute_error_stats(err_list: List[float]) -> Dict[str, float]:
+    """
+    絶対誤差配列 err_list (Python list of float) から
+    各種統計量を計算して返す。
+
+    返す値:
+    - mae: mean(|err|)
+    - p95: 95th percentile
+    - max: max(|err|)
+    - median: median(|err|)
+    - iqr: Q3 - Q1
+    - trimmed_mae: 上下5%を除外した中間90%の平均
+    """
+    if len(err_list) == 0:
+        return {
+            "mae": float("nan"),
+            "p95": float("nan"),
+            "max": float("nan"),
+            "median": float("nan"),
+            "iqr": float("nan"),
+            "trimmed_mae": float("nan"),
+        }
+
+    arr = np.asarray(err_list, dtype=np.float64)
+    mae = float(arr.mean())
+    p95 = float(np.percentile(arr, 95))
+    max_err = float(arr.max())
+    median = float(np.median(arr))
+    q1 = float(np.percentile(arr, 25))
+    q3 = float(np.percentile(arr, 75))
+    iqr = q3 - q1
+
+    # trimmed MAE (上下5%除外)
+    n = len(arr)
+    if n > 2:
+        arr_sorted = np.sort(arr)
+        k = int(round(n * 0.05))
+        if k * 2 >= n:
+            trimmed_mae = mae
+        else:
+            trimmed_region = arr_sorted[k:n - k]
+            trimmed_mae = float(trimmed_region.mean())
+    else:
+        trimmed_mae = mae
+
+    return {
+        "mae": mae,
+        "p95": p95,
+        "max": max_err,
+        "median": median,
+        "iqr": iqr,
+        "trimmed_mae": trimmed_mae,
+    }
 
 # ============================================================
 # Model Architecture (ResNet: Normal & Dilated)
@@ -324,7 +396,7 @@ def plot_training_curves_basic(train_losses, val_losses_main, val_maes_main, out
     ax[0].legend()
 
     # MAE (Val#1)
-    ax[1].plot(epochs, val_maes_main, label="val_MAE_1 (deg)", color="orange")
+    ax[1].plot(epochs, val_maes_main, label="val_MAE_1 (deg)")
     ax[1].set_title("MAE (Degrees, Val#1)")
     ax[1].set_xlabel("Epoch")
     ax[1].set_ylabel("MAE [deg]")
@@ -359,6 +431,67 @@ def plot_training_curves_multi(train_losses, val_losses_all: List[List[float]], 
     plt.savefig(out_dir / "figs" / "curves_multi_val.png")
     plt.close()
 
+def plot_epochwise_val_metrics_from_log(log_df: pd.DataFrame, num_valid: int, out_dir: Path):
+    """
+    2-2 & 2-3 で毎epoch記録した指標を、epoch-曲線として可視化する。
+
+    対象指標（Valごとに _1, _2, ... が付く前提）:
+      - val_p95_deg_i
+      - val_max_err_deg_i
+      - val_median_err_deg_i
+      - val_IQR_deg_i
+      - val_trimmed_MAE_deg_i
+    """
+    epochs = log_df["epoch"].values
+
+    metric_bases = [
+        "val_p95_deg",
+        "val_max_err_deg",
+        "val_median_err_deg",
+        "val_IQR_deg",
+        "val_trimmed_MAE_deg",
+    ]
+    metric_titles = {
+        "val_p95_deg": "Validation p95 Error (deg)",
+        "val_max_err_deg": "Validation Max Error (deg)",
+        "val_median_err_deg": "Validation Median Error (deg)",
+        "val_IQR_deg": "Validation IQR of Error (deg)",
+        "val_trimmed_MAE_deg": "Validation Trimmed MAE (5% cut, deg)",
+    }
+    metric_ylabels = {
+        "val_p95_deg": "p95 |err| [deg]",
+        "val_max_err_deg": "max |err| [deg]",
+        "val_median_err_deg": "median |err| [deg]",
+        "val_IQR_deg": "IQR |err| [deg]",
+        "val_trimmed_MAE_deg": "trimmed MAE [deg]",
+    }
+
+    for base in metric_bases:
+        fig, ax = plt.subplots(figsize=(8, 4))
+        has_any = False
+        for i in range(1, num_valid + 1):
+            col = f"{base}_{i}"
+            if col not in log_df.columns:
+                continue
+            y = log_df[col].values
+            ax.plot(epochs, y, label=f"Val#{i}")
+            has_any = True
+
+        if not has_any:
+            plt.close(fig)
+            continue
+
+        title = metric_titles.get(base, base)
+        ylabel = metric_ylabels.get(base, base)
+        ax.set_title(title)
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel(ylabel)
+        ax.legend()
+        plt.tight_layout()
+        fname = f"curves_{base}.png"
+        plt.savefig(out_dir / "figs" / fname)
+        plt.close()
+
 # ============================================================
 # Training / Validation Steps
 # ============================================================
@@ -382,9 +515,17 @@ def train_epoch(model, loader, optimizer, criterion, device, ep):
         
     return total / len(loader.dataset)
 
-def validate(model, loader, criterion, device, ep):
+def validate(model, loader, criterion, device, ep) -> Tuple[float, Dict[str, float]]:
+    """
+    1つの validation loader について:
+      - 平均 loss
+      - 絶対誤差の統計量 (mae, p95, max, median, iqr, trimmed_mae)
+    を返す。
+    """
     model.eval()
-    total, mae_list = 0.0, []
+    total = 0.0
+    err_list: List[float] = []
+
     # tqdmでの進捗表示
     pbar = tqdm(loader, desc=f"Epoch {ep:03d} [Valid]", leave=False)
     with torch.no_grad():
@@ -396,11 +537,126 @@ def validate(model, loader, criterion, device, ep):
             total += loss.item() * imgs.size(0)
             
             # 角度誤差の計算
-            err = circular_error(sincos2deg(outputs.cpu()), tgt_deg)
-            mae_list.extend(err.numpy())
-            pbar.set_postfix(mae=f"{np.mean(mae_list) if mae_list else 0:.3f}")
-            
-    return total / len(loader.dataset), float(np.mean(mae_list))
+            pred_deg = sincos2deg(outputs.cpu())
+            err = circular_error(pred_deg, tgt_deg)
+            abs_err = err.numpy()  # すでにabsolute
+            err_list.extend(abs_err.tolist())
+            # 今回のバッチまでのMAEを簡易表示
+            stats_tmp = compute_error_stats(err_list)
+            pbar.set_postfix(mae=f"{stats_tmp['mae']:.3f}")
+    
+    avg_loss = total / len(loader.dataset)
+    stats = compute_error_stats(err_list)
+    return avg_loss, stats
+
+# ============================================================
+# Detailed Evaluation after Training (2-1)
+# ============================================================
+
+def run_detailed_eval_for_checkpoint(
+    model: nn.Module,
+    ckpt_path: Path,
+    device: torch.device,
+    valid_ld_list: List[DataLoader],
+    run_dir: Path,
+    tag: str,
+):
+    """
+    2-1: best.pth / latest.pth について、すべての validation セットで詳細評価を行う。
+
+    - ckpt_path: 読み込む checkpoint (best.pth or latest.pth)
+    - tag: "best" or "latest" など
+    """
+    if not ckpt_path.exists():
+        print(f"[WARN] Checkpoint not found, skip detailed eval: {ckpt_path}")
+        return
+
+    print(f"🔍 Detailed eval for {ckpt_path.name} (tag={tag})")
+
+    # 重みロード
+    state = torch.load(ckpt_path, map_location=device)
+    model.load_state_dict(state)
+    model.to(device)
+    model.eval()
+
+    for vidx, vld in enumerate(valid_ld_list, start=1):
+        all_filenames: List[str] = []
+        all_true_deg: List[float] = []
+        all_pred_deg: List[float] = []
+        all_err_deg: List[float] = []
+        all_abs_err_deg: List[float] = []
+
+        with torch.no_grad():
+            pbar = tqdm(vld, desc=f"[DetailEval-{tag}] Val#{vidx}", leave=False)
+            for imgs, tgt_deg, filenames in pbar:
+                imgs = imgs.to(device)
+                outputs = model(imgs)
+
+                pred_deg = sincos2deg(outputs.cpu())
+                err = circular_error(pred_deg, tgt_deg)
+
+                pred_deg_np = pred_deg.numpy().astype(np.float64)
+                true_deg_np = tgt_deg.numpy().astype(np.float64)
+                err_np = err.numpy().astype(np.float64)
+
+                all_filenames.extend(list(filenames))
+                all_true_deg.extend(true_deg_np.tolist())
+                all_pred_deg.extend(pred_deg_np.tolist())
+                all_err_deg.extend(err_np.tolist())
+                all_abs_err_deg.extend(np.abs(err_np).tolist())
+
+        # DataFrame 化
+        df = pd.DataFrame({
+            "filename": all_filenames,
+            "true_roll_deg": all_true_deg,
+            "pred_roll_deg": all_pred_deg,
+            "err_deg": all_err_deg,
+            "abs_err_deg": all_abs_err_deg,
+        })
+
+        # CSV 保存
+        csv_path = run_dir / f"eval_detail_val{vidx}_{tag}.csv"
+        df.to_csv(csv_path, index=False)
+        print(f"📝 Saved detailed eval CSV: {csv_path}")
+
+        # 統計量
+        stats = compute_error_stats(all_abs_err_deg)
+
+        # ヒストグラム
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.hist(df["abs_err_deg"].values, bins=40)
+        ax.set_title(f"Abs Error Histogram (Val#{vidx}, {tag})")
+        ax.set_xlabel("|error| [deg]")
+        ax.set_ylabel("Count")
+        plt.tight_layout()
+        plt.savefig(run_dir / "figs" / f"detail_val{vidx}_{tag}_hist.png")
+        plt.close()
+
+        # 真値 vs 推定値 Scatter
+        fig, ax = plt.subplots(figsize=(6, 6))
+        ax.scatter(df["true_roll_deg"].values, df["pred_roll_deg"].values, s=10, alpha=0.6)
+        # y=x line
+        lim_min = min(df["true_roll_deg"].min(), df["pred_roll_deg"].min())
+        lim_max = max(df["true_roll_deg"].max(), df["pred_roll_deg"].max())
+        ax.plot([lim_min, lim_max], [lim_min, lim_max], "k--", linewidth=1)
+        ax.set_title(f"True vs Pred (Val#{vidx}, {tag})")
+        ax.set_xlabel("True roll [deg]")
+        ax.set_ylabel("Pred roll [deg]")
+        plt.tight_layout()
+        plt.savefig(run_dir / "figs" / f"detail_val{vidx}_{tag}_scatter_true_pred.png")
+        plt.close()
+
+        # 誤差 vs 真値 Scatter
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.scatter(df["true_roll_deg"].values, df["err_deg"].values, s=10, alpha=0.6)
+        ax.axhline(0.0, color="k", linestyle="--", linewidth=1)
+        ax.set_title(f"Error vs True (Val#{vidx}, {tag})\n"
+                     f"MAE={stats['mae']:.2f}, p95={stats['p95']:.2f}, max={stats['max']:.2f}")
+        ax.set_xlabel("True roll [deg]")
+        ax.set_ylabel("error [deg]")
+        plt.tight_layout()
+        plt.savefig(run_dir / "figs" / f"detail_val{vidx}_{tag}_error_vs_true.png")
+        plt.close()
 
 # ============================================================
 # Experiment Driver
@@ -441,6 +697,8 @@ def run_experiment(cfg):
             cfg["BATCH_SIZE"], False, num_workers=cfg.get("NUM_WORKERS", 4)
         )
         valid_ld_list.append(vld)
+
+    num_valid = len(valid_ld_list)
 
     # ---------------------------
     # モデルのビルド
@@ -500,7 +758,6 @@ def run_experiment(cfg):
     train_losses: List[float] = []
     val_losses_main: List[float] = []    # Val#1 用
     val_maes_main: List[float] = []      # Val#1 用
-    num_valid = len(valid_ld_list)
     val_losses_all: List[List[float]] = [[] for _ in range(num_valid)]
 
     best_mae, no_improve = float("inf"), 0
@@ -533,16 +790,18 @@ def run_experiment(cfg):
 
         # --- Multi-Validation ---
         epoch_val_losses: List[float] = []
-        epoch_val_maes: List[float] = []
+        epoch_val_stats: List[Dict[str, float]] = []  # mae, p95, max, median, iqr, trimmed_mae
+
         for vidx, vld in enumerate(valid_ld_list):
-            vl_i, mae_i = validate(model, vld, criterion, device, ep)
+            vl_i, stats_i = validate(model, vld, criterion, device, ep)
             epoch_val_losses.append(vl_i)
-            epoch_val_maes.append(mae_i)
+            epoch_val_stats.append(stats_i)
             val_losses_all[vidx].append(vl_i)
 
         # primary (Val#1)
         vl_primary = epoch_val_losses[0]
-        mae_primary = epoch_val_maes[0]
+        stats_primary = epoch_val_stats[0]
+        mae_primary = stats_primary["mae"]
         val_losses_main.append(vl_primary)
         val_maes_main.append(mae_primary)
 
@@ -562,24 +821,31 @@ def run_experiment(cfg):
         # それ以外の validation セットについては MAE のみ表示 (val2_MAE, val3_MAE, ...)
         if num_valid > 1:
             others = " ".join(
-                [f"val{i+1}_MAE={epoch_val_maes[i]:.3f}"
+                [f"val{i+1}_MAE={epoch_val_stats[i]['mae']:.3f}"
                  for i in range(1, num_valid)]
             )
             msg += " | " + others
         print(msg)
 
-        # ★ ログ1行分を追加（CSV用：loss も MAE もすべて保存）
-        log_row = {
+        # ★ ログ1行分を追加（CSV用：loss も MAE も、2-2/2-3指標もすべて保存）
+        log_row: Dict[str, float] = {
             "epoch": ep,
             "train_loss": tl,
-            "val_loss": vl_primary,          # 従来の列名は Val#1 に対応
-            "val_MAE_deg": mae_primary,      # 同上
+            "val_loss": vl_primary,                  # 従来の列名は Val#1 に対応
+            "val_MAE_deg": mae_primary,              # 同上
             "lr": current_lr,
         }
         # すべての Val セットについて個別列も記録
-        for i, (vl_i, mae_i) in enumerate(zip(epoch_val_losses, epoch_val_maes), start=1):
+        for i, (vl_i, stats_i) in enumerate(zip(epoch_val_losses, epoch_val_stats), start=1):
             log_row[f"val_loss_{i}"] = vl_i
-            log_row[f"val_MAE_deg_{i}"] = mae_i
+            log_row[f"val_MAE_deg_{i}"] = stats_i["mae"]
+            # 2-2: p95, max, median
+            log_row[f"val_p95_deg_{i}"] = stats_i["p95"]
+            log_row[f"val_max_err_deg_{i}"] = stats_i["max"]
+            log_row[f"val_median_err_deg_{i}"] = stats_i["median"]
+            # 2-3: IQR, trimmed MAE
+            log_row[f"val_IQR_deg_{i}"] = stats_i["iqr"]
+            log_row[f"val_trimmed_MAE_deg_{i}"] = stats_i["trimmed_mae"]
 
         train_log.append(log_row)
         
@@ -597,16 +863,31 @@ def run_experiment(cfg):
             break
 
     # ---------------------------
-    # ログ保存 & 学習曲線描画
+    # ログ保存
     # ---------------------------
     log_df = pd.DataFrame(train_log)
     log_df.to_csv(run_dir / "train_log.csv", index=False)
     print(f"📝 Saved training log to {run_dir / 'train_log.csv'}")
 
+    # ---------------------------
     # 学習曲線の保存
+    # ---------------------------
     plot_training_curves_basic(train_losses, val_losses_main, val_maes_main, run_dir)
     plot_training_curves_multi(train_losses, val_losses_all, run_dir)
+
+    # 2-2 & 2-3: epoch-wise metric curves
+    plot_epochwise_val_metrics_from_log(log_df, num_valid=num_valid, out_dir=run_dir)
+
     print(f"✨ Finished {cfg['id']}: Best MAE (Val#1) = {best_mae:.3f}")
+
+    # ---------------------------
+    # 2-1: Detailed Evaluation for best.pth と latest.pth
+    # ---------------------------
+    best_ckpt = run_dir / "checkpoints" / "best.pth"
+    latest_ckpt = run_dir / "checkpoints" / "latest.pth"
+
+    run_detailed_eval_for_checkpoint(model, best_ckpt, device, valid_ld_list, run_dir, tag="best")
+    run_detailed_eval_for_checkpoint(model, latest_ckpt, device, valid_ld_list, run_dir, tag="latest")
 
 # ============================================================
 # Main Entry Point
@@ -614,7 +895,7 @@ def run_experiment(cfg):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="config_lab_kensho3-v6.yaml")
+    parser.add_argument("--config", default="config_lab_kensho3-v10.yaml")
     args = parser.parse_args()
     
     configs = load_configs(args.config)

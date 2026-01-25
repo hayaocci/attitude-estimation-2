@@ -30,17 +30,14 @@ import yaml  # augment_config.yaml 出力用
 class CONFIG:
     # 1. ベース変換の選択
     # 追加した "stretch" を含めています
-    # SELECTED_BASES = ["iso_noise", "blur", "bright", "vstrip", "stretch"]
-    # SELECTED_BASES = ["iso_noise", "bright", "vstrip", "stretch"]
-    # SELECTED_BASES = ["blur"]
-    # SELECTED_BASES = ["stretch"]
-    # SELECTED_BASES = ["vstrip", "stretch"]
-    SELECTED_BASES = ["iso_noise", "bright", "vstrip", "stretch"]
+    # SELECTED_BASES = ["orig", "iso_noise", "blur", "bright", "vstrip", "stretch"]
+    SELECTED_BASES = ["orig", "vstrip", "stretch"]    
+    # SELECTED_BASES = ["orig", "vstrip"]    
 
     # 2. 派生変換の有効化
     ENABLE_RBBOX  = True
     ENABLE_CROP   = True
-    ENABLE_HIDE   = True
+    ENABLE_HIDE   = False
 
     # 3. 保存設定
     SAVE_BASE_TRANSFORMS = True
@@ -85,9 +82,12 @@ def apply_vstrip(img: np.ndarray, n_options: List[int], bright_range: Tuple[floa
     for i in range(n_strips):
         found = False
         for _ in range(100):
-            val = random.uniform(*bright_range)
-            if random.random() < 0.5:
-                val = -val
+            # val = random.uniform(*bright_range)
+            # if random.random() < 0.5:
+            #     val = -val
+            # if i == 0 or abs(val - offsets[i-1]) >= 32:
+            #     offsets.append(val)
+            val = -random.uniform(*bright_range)
             if i == 0 or abs(val - offsets[i-1]) >= 32:
                 offsets.append(val)
                 found = True
@@ -131,18 +131,35 @@ def gaussian_blur(img, k_rng):
     k = random.randrange(k_rng[0] | 1, (k_rng[1] + 1) | 1, 2)
     return cv2.GaussianBlur(img, (k, k), 0)
 
-def hide_quadrants(img, n_rng):
-    n = random.randint(*n_rng)
+# def hide_quadrants(img, n_rng):
+#     n = random.randint(*n_rng)
+#     out = img.copy()
+#     h2, w2 = out.shape[0] // 2, out.shape[1] // 2
+#     quads = [
+#         (slice(0, h2), slice(0, w2)),
+#         (slice(0, h2), slice(w2, None)),
+#         (slice(h2, None), slice(0, w2)),
+#         (slice(h2, None), slice(w2, None)),
+#     ]
+#     for idx in random.sample(range(4), n):
+#         out[quads[idx]] = 0
+#     return out
+
+def hide_half(img: np.ndarray, side: str) -> np.ndarray:
+    """
+    side: "left" or "right"
+    """
     out = img.copy()
-    h2, w2 = out.shape[0] // 2, out.shape[1] // 2
-    quads = [
-        (slice(0, h2), slice(0, w2)),
-        (slice(0, h2), slice(w2, None)),
-        (slice(h2, None), slice(0, w2)),
-        (slice(h2, None), slice(w2, None)),
-    ]
-    for idx in random.sample(range(4), n):
-        out[quads[idx]] = 0
+    h, w = out.shape[:2]
+
+    if side == "left":
+        out[:, : w // 2] = 0
+    elif side == "right":
+        out[:, w // 2 :] = 0
+    else:
+        # 想定外の指定が来たら何もしない
+        return out
+
     return out
 
 def specific_crop_and_paste(img, crop, vis_thr=0.6):
@@ -290,6 +307,7 @@ def process_single_image(
     f_col_key: str,
     r_col_key: str,
     modality: str,
+    hide_side: str | None = None,  # ★ 追加
 ):
     """
     画像1枚を読み込んで全バリエーションを保存する関数（並列ワーカー）
@@ -397,8 +415,24 @@ def process_single_image(
     # 派生変換と保存
     variants = {}
     variants.update(base_imgs)
+    # for n, b in base_imgs.items():
+    #     fb = apply_fixed_bboxes(b, roll, scaler, f_col_fn)
+    #     if CONFIG.ENABLE_RBBOX:
+    #         variants[f"{n}_{DERIVED_SUFFIXES['random_bbox']}"] = apply_random_bboxes(
+    #             fb, roll, scaler, args, r_col_fn
+    #         )
+    #     if CONFIG.ENABLE_CROP:
+    #         variants[f"{n}_{DERIVED_SUFFIXES['crop']}"] = specific_crop_and_paste(
+    #             fb, tuple(args.crop_params), args.visibility_threshold
+    #         )
+    #     if CONFIG.ENABLE_HIDE:
+    #         variants[f"{n}_{DERIVED_SUFFIXES['hide']}"] = hide_quadrants(
+    #             b, tuple(args.hide_n)
+    #         )
+
     for n, b in base_imgs.items():
         fb = apply_fixed_bboxes(b, roll, scaler, f_col_fn)
+
         if CONFIG.ENABLE_RBBOX:
             variants[f"{n}_{DERIVED_SUFFIXES['random_bbox']}"] = apply_random_bboxes(
                 fb, roll, scaler, args, r_col_fn
@@ -407,14 +441,14 @@ def process_single_image(
             variants[f"{n}_{DERIVED_SUFFIXES['crop']}"] = specific_crop_and_paste(
                 fb, tuple(args.crop_params), args.visibility_threshold
             )
-        if CONFIG.ENABLE_HIDE:
-            variants[f"{n}_{DERIVED_SUFFIXES['hide']}"] = hide_quadrants(
-                b, tuple(args.hide_n)
+        if CONFIG.ENABLE_HIDE and hide_side in ("left", "right"):
+            variants[f"{n}_{DERIVED_SUFFIXES['hide']}"] = hide_half(
+                b, hide_side
             )
 
     for tag, v in variants.items():
-        if tag == "orig":
-            continue
+        # if tag == "orig":
+        #     continue
         if (not CONFIG.SAVE_BASE_TRANSFORMS) and tag in CONFIG.SELECTED_BASES:
             continue
         if np.count_nonzero(v) == 0:
@@ -660,15 +694,23 @@ def main():
         help="cache 配下でデータ拡張を行うサブフォルダ名リスト。例: rgb gray bin4。指定しない場合は3つすべてを処理する。"
     )
 
+    pa.add_argument(
+        "--target_sizes",
+        nargs="+",
+        type=int,
+        default=None,
+        help="処理対象とする画像サイズ（szXXX_area の XXX）。例: --target_sizes 224 112"
+    )
+
     # 色・乱数・テスト設定
     pa.add_argument(
         "--fixed_color",
-        default="random_rainbow",
+        default="random_gray",
         help="固定BBOX（roll 依存の矩形）を塗りつぶすときの色モード。black/white/gray/random_gray など。"
     )
     pa.add_argument(
         "--rand_color",
-        default="random_rainbow",
+        default="random_gray",
         help="ランダムBBOXを塗りつぶすときの色モード。black/white/gray/random_gray など。"
     )
     pa.add_argument(
@@ -702,7 +744,7 @@ def main():
         "--strip_bright_range",
         nargs=2,
         type=float,
-        default=[20, 80],
+        default=[20, 60],
         help="vstrip で各ストリップに加える輝度オフセットの絶対値レンジ [min, max]。正負はランダムに決まる。"
     )
     pa.add_argument(
@@ -739,7 +781,7 @@ def main():
         "--stretch_range",
         nargs=2,
         type=float,
-        default=[1.0, 1.3],
+        default=[1.1, 1.5],
         help="stretch で縦または横方向にかけるスケール倍率のレンジ [min, max]。1.0 以上で引き伸ばし。"
     )
 
@@ -819,16 +861,27 @@ def main():
         if not base.exists():
             print(f"[WARN] cache subdir not found: {base} → skipping")
             continue
+
         sub_targets = [
             p
             for p in base.rglob("*")
             if p.is_dir()
             and re.search(r"sz\d+_area$", p.name)
-            and (p / args.split_name / "imgs").exists()  # ← split_name に対応
+            and (p / args.split_name / "imgs").exists()
         ]
         if not sub_targets:
             print(f"[WARN] no sz*_area/{args.split_name}/imgs found under: {base}")
+
         for p in sub_targets:
+            # ★ ここで szXXX_area の XXX を取り出してフィルタする
+            if args.target_sizes is not None:
+                m = re.search(r"sz(\d+)_area", p.name)
+                if not m:
+                    continue
+                sz_val = int(m.group(1))
+                if sz_val not in args.target_sizes:
+                    continue
+
             target_dirs.append((p, sub))
 
     if not target_dirs:
@@ -853,6 +906,66 @@ def main():
 
         # 入力元: .../<cache_subdir>/szXXX_area/<split_name>/imgs
         split_in = in_dir / args.split_name
+        # src = sorted((split_in / "imgs").glob("*.png")) + sorted(
+        #     (split_in / "imgs").glob("*.jpg")
+        # )
+        # if args.test:
+        #     src = src[:10]
+
+        # # labels.csv も split_name 配下から読み込む
+        # meta = {
+        #     r["filename"]: r
+        #     for r in list(csv.DictReader((split_in / "labels.csv").open()))
+        # }
+
+        # # スケーリング済み引数
+        # temp_args = argparse.Namespace(**vars(args))
+        # temp_args.rand_box_wh = [int(v * s) for v in args.rand_box_wh]
+        # temp_args.rand_box_area = [int(v * s) for v in args.rand_box_area]
+        # temp_args.crop_params = [int(v * s) for v in args.crop_params]
+
+        # # この szXXX_area に対する有効パラメータを記録
+        # targets_info.append(
+        #     {
+        #         "rel_path": str(rel_path),
+        #         "img_size": img_sz,
+        #         "scale": s,
+        #         "modality": modality,
+        #         "effective_params": {
+        #             "rand_box_wh": list(temp_args.rand_box_wh),
+        #             "rand_box_area": list(temp_args.rand_box_area),
+        #             "crop_params": list(temp_args.crop_params),
+        #         },
+        #     }
+        # )
+
+        # all_new_rows = []
+        # # --- 並列処理の実行 ---
+        # with ProcessPoolExecutor(max_workers=args.workers) as executor:
+        #     futures = [
+        #         executor.submit(
+        #             process_single_image,
+        #             p,
+        #             meta.get(
+        #                 p.name,
+        #                 {"filename": p.name, "roll": 0, "pitch": 0, "yaw": 0},
+        #             ),
+        #             scaler,
+        #             temp_args,
+        #             img_out_dir,
+        #             args.fixed_color,
+        #             args.rand_color,
+        #             modality,
+        #         )
+        #         for p in src
+        #     ]
+        #     for f in tqdm(
+        #         as_completed(futures),
+        #         total=len(src),
+        #         desc=f"Processing {rel_path} ({img_sz}px, mode={modality})",
+        #     ):
+        #         all_new_rows.extend(f.result())
+
         src = sorted((split_in / "imgs").glob("*.png")) + sorted(
             (split_in / "imgs").glob("*.jpg")
         )
@@ -886,26 +999,57 @@ def main():
             }
         )
 
+        # ============================
+        # ★ hide 用の left/right 割り当て
+        # ============================
+        hide_sides = None
+        if CONFIG.ENABLE_HIDE:
+            n = len(src)
+            indices = list(range(n))
+            random.shuffle(indices)
+
+            hide_sides = ["none"] * n
+            pair_count = n // 2  # ペア数
+            for i in range(pair_count):
+                a = indices[2 * i]
+                b = indices[2 * i + 1]
+                hide_sides[a] = "left"
+                hide_sides[b] = "right"
+            # n が奇数のときは 1 枚だけ "none" のまま（hide なし）
+
         all_new_rows = []
         # --- 並列処理の実行 ---
         with ProcessPoolExecutor(max_workers=args.workers) as executor:
-            futures = [
-                executor.submit(
-                    process_single_image,
-                    p,
-                    meta.get(
-                        p.name,
-                        {"filename": p.name, "roll": 0, "pitch": 0, "yaw": 0},
-                    ),
-                    scaler,
-                    temp_args,
-                    img_out_dir,
-                    args.fixed_color,
-                    args.rand_color,
-                    modality,
+            futures = []
+            for idx, p in enumerate(src):
+                # この画像に対して適用する hide_side を決定
+                if hide_sides is not None:
+                    hs = hide_sides[idx]
+                    if hs == "none":
+                        hide_side = None
+                    else:
+                        hide_side = hs
+                else:
+                    hide_side = None
+
+                futures.append(
+                    executor.submit(
+                        process_single_image,
+                        p,
+                        meta.get(
+                            p.name,
+                            {"filename": p.name, "roll": 0, "pitch": 0, "yaw": 0},
+                        ),
+                        scaler,
+                        temp_args,
+                        img_out_dir,
+                        args.fixed_color,
+                        args.rand_color,
+                        modality,
+                        hide_side,  # ★ ここで渡す
+                    )
                 )
-                for p in src
-            ]
+
             for f in tqdm(
                 as_completed(futures),
                 total=len(src),
