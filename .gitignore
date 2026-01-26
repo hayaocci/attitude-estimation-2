@@ -36,3 +36,4 @@ config_lab_kensho3-v10.yaml
 lab_logs_old
 config_color.yaml
 c123_logs/
+slide_logs/ 
