@@ -127,10 +127,24 @@ def to_gray(img_bgr: np.ndarray) -> np.ndarray:
     return lab[:, :, 0]
 
 
-def to_bin4(gray: np.ndarray) -> np.ndarray:
-    """Lチャンネル画像（0-255）を4値化して 0, 85, 170, 255 にする。"""
-    return (np.digitize(gray, [10, 30, 120], right=False) * 85).astype(np.uint8)
+# def to_bin4(gray: np.ndarray) -> np.ndarray:
+#     """Lチャンネル画像（0-255）を4値化して 0, 85, 170, 255 にする。"""
+#     return (np.digitize(gray, [25, 30, 120], right=False) * 85).astype(np.uint8)
 
+def to_bin4(gray: np.ndarray) -> np.ndarray:
+    """
+    Lチャンネル画像（0-255）を4値化して
+    出力値を [0, 85, 170, 255] に固定して返す。
+    """
+    # digitize → 0,1,2,3 のbin indexに変換
+    bins = [32, 90, 120]  # 適宜変更OK
+    idx = np.digitize(gray, bins, right=False)
+
+    # 固定出力値テーブル（不変）
+    levels = np.array([0, 85, 170, 255], dtype=np.uint8)
+
+    # インデックスで出力
+    return levels[idx]
 
 def save_if_not_exists(img: np.ndarray, path: Path) -> None:
     """ファイルが存在しない場合のみ保存する。"""
