@@ -895,7 +895,7 @@ def run_experiment(cfg):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="config_lab_kensho3-v24.yaml")
+    parser.add_argument("--config", default="config_lab_kensho3-v25-2.yaml")
     args = parser.parse_args()
     
     configs = load_configs(args.config)

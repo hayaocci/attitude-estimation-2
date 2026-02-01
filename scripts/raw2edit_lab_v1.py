@@ -137,7 +137,7 @@ def to_bin4(gray: np.ndarray) -> np.ndarray:
     出力値を [0, 85, 170, 255] に固定して返す。
     """
     # digitize → 0,1,2,3 のbin indexに変換
-    bins = [32, 90, 120]  # 適宜変更OK
+    bins = [10, 30, 120]  # 適宜変更OK
     idx = np.digitize(gray, bins, right=False)
 
     # 固定出力値テーブル（不変）

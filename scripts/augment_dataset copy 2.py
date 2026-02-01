@@ -83,7 +83,6 @@ class CONFIG:
 
 
     # 2. 派生変換の有効化
-    ENABLE_FIXED_BBOX = True   # ★ 追加：fixed box を ON/OFF
     ENABLE_RBBOX  = True
     ENABLE_CROP   = True
     ENABLE_HIDE   = True
@@ -243,20 +242,11 @@ def specific_crop_and_paste(img, crop, vis_thr=0.6):
 # BBOX ユーティリティ
 # ──────────────────────────────────────────────────────────────
 class BBoxScaler:
-    def __init__(
-        self,
-        scale: float,
-        base_C: float = 112.0,
-        base_O1: float = 50.0,
-        base_O2: float = 90.0,
-        base_BW: float = 40.0,
-        base_BH: float = 40.0,
-    ):
-        self.C  = int(round(base_C  * scale))
-        self.O1 = int(round(base_O1 * scale))
-        self.O2 = int(round(base_O2 * scale))
-        self.BW = int(round(base_BW * scale))
-        self.BH = int(round(base_BH * scale))
+    def __init__(self, scale: float):
+        self.C = int(round(112 * scale))
+        self.O1 = int(round(50 * scale))
+        self.O2 = int(round(90 * scale))
+        self.BW = self.BH = int(round(40 * scale))
 
     def vertices(self, cx, cy):
         return (int(cx - self.BW / 2), int(cy - self.BH / 2)), (
@@ -537,27 +527,8 @@ def process_single_image(
     #             b, tuple(args.hide_n)
     #         )
 
-    # for n, b in base_imgs.items():
-    #     fb = apply_fixed_bboxes(b, roll, scaler, f_col_fn)
-
-    #     if CONFIG.ENABLE_RBBOX:
-    #         variants[f"{n}_{DERIVED_SUFFIXES['random_bbox']}"] = apply_random_bboxes(
-    #             fb, roll, scaler, args, r_col_fn
-    #         )
-    #     if CONFIG.ENABLE_CROP:
-    #         variants[f"{n}_{DERIVED_SUFFIXES['crop']}"] = specific_crop_and_paste(
-    #             fb, tuple(args.crop_params), args.visibility_threshold
-    #         )
-    #     if CONFIG.ENABLE_HIDE and hide_side in ("top", "bottom", "right"):
-    #         variants[f"{n}_{DERIVED_SUFFIXES['hide']}"] = hide_half(
-    #             b, hide_side
-    #         )
-
     for n, b in base_imgs.items():
-        if CONFIG.ENABLE_FIXED_BBOX:
-            fb = apply_fixed_bboxes(b, roll, scaler, f_col_fn)
-        else:
-            fb = b
+        fb = apply_fixed_bboxes(b, roll, scaler, f_col_fn)
 
         if CONFIG.ENABLE_RBBOX:
             variants[f"{n}_{DERIVED_SUFFIXES['random_bbox']}"] = apply_random_bboxes(
@@ -568,7 +539,6 @@ def process_single_image(
                 fb, tuple(args.crop_params), args.visibility_threshold
             )
         if CONFIG.ENABLE_HIDE and hide_side in ("top", "bottom", "right"):
-            # hide は「固定BBOX塗り前」の b に対して隠す設計のまま維持
             variants[f"{n}_{DERIVED_SUFFIXES['hide']}"] = hide_half(
                 b, hide_side
             )
@@ -601,8 +571,7 @@ def build_augment_config_dict(
     final_out_root: Path,
     targets_info: List[dict],
 ) -> dict:
-    """augment_config.yaml 用の辞書を構築する（再現性のため実行設定を保存）"""
-
+    """augment_config.yaml 用の辞書を構築する"""
     # meta
     created_at = time.strftime("%Y-%m-%dT%H:%M:%S")
     script_name = Path(__file__).name if "__file__" in globals() else "augment_sz_area_v5_batch_parallel.py"
@@ -618,40 +587,20 @@ def build_augment_config_dict(
         "test_mode": bool(args.test),
     }
 
-    # ---- fixed bbox settings (backward compatible) ----
-    enable_fixed_bbox = bool(getattr(CONFIG, "ENABLE_FIXED_BBOX", True))
-    fixed_bbox_base_constants = {
-        "reference_size": 224,
-        "C": float(getattr(args, "fixed_bbox_C", 112.0)),
-        "O1": float(getattr(args, "fixed_bbox_O1", 50.0)),
-        "O2": float(getattr(args, "fixed_bbox_O2", 90.0)),
-        "BW": float(getattr(args, "fixed_bbox_BW", 40.0)),
-        "BH": float(getattr(args, "fixed_bbox_BH", 40.0)),
-    }
-
     # config（CONFIG + コマンドライン引数）
     config = {
         "selected_bases": list(CONFIG.SELECTED_BASES),
-        "enable_fixed_bbox": enable_fixed_bbox,               # ★追加
         "enable_random_bbox": bool(CONFIG.ENABLE_RBBOX),
         "enable_crop": bool(CONFIG.ENABLE_CROP),
         "enable_hide": bool(CONFIG.ENABLE_HIDE),
         "save_base_transforms": bool(CONFIG.SAVE_BASE_TRANSFORMS),
-
         "fixed_color": args.fixed_color,
         "rand_color": args.rand_color,
         "cache_subdirs": list(args.cache_subdirs),
-        "split_name": args.split_name,
-
-        # ★追加: fixed bbox の基準定数（224基準）をそのまま残す
-        "fixed_bbox_base_constants": fixed_bbox_base_constants,
-
+        "split_name": args.split_name,  # ← これを追加
         "params": {
             "vstrip_n": list(args.vstrip_n),
-            "strip_bright_range": [
-                float(args.strip_bright_range[0]),
-                float(args.strip_bright_range[1]),
-            ],
+            "strip_bright_range": [float(args.strip_bright_range[0]), float(args.strip_bright_range[1])],
             "strip_blend_ratio": float(args.strip_blend_ratio),
             "iso_sigma": float(args.iso_sigma),
             "bright": [float(args.bright[0]), float(args.bright[1])],
@@ -659,31 +608,21 @@ def build_augment_config_dict(
             "stretch_range": [float(args.stretch_range[0]), float(args.stretch_range[1])],
             "rand_boxes": [int(args.rand_boxes[0]), int(args.rand_boxes[1])],
             "rand_box_wh_base": [int(args.rand_box_wh[0]), int(args.rand_box_wh[1])],
-            "rand_box_area_base": [
-                int(args.rand_box_area[0]),
-                int(args.rand_box_area[1]),
-                int(args.rand_box_area[2]),
-                int(args.rand_box_area[3]),
-            ],
+            "rand_box_area_base": [int(args.rand_box_area[0]), int(args.rand_box_area[1]),
+                                   int(args.rand_box_area[2]), int(args.rand_box_area[3])],
             "hide_n": [int(args.hide_n[0]), int(args.hide_n[1])],
-            "crop_params_base": [
-                int(args.crop_params[0]),
-                int(args.crop_params[1]),
-                int(args.crop_params[2]),
-                int(args.crop_params[3]),
-            ],
+            "crop_params_base": [int(args.crop_params[0]), int(args.crop_params[1]),
+                                 int(args.crop_params[2]), int(args.crop_params[3])],
             "visibility_threshold": float(args.visibility_threshold),
         },
-
-        # ★修正: YAML上の bbox_scaler も CLI値（fixed bbox）に合わせて整合させる
         "bbox_scaler": {
             "reference_size": 224,
             "base_constants": {
-                "C": fixed_bbox_base_constants["C"],
-                "O1": fixed_bbox_base_constants["O1"],
-                "O2": fixed_bbox_base_constants["O2"],
-                "BW": fixed_bbox_base_constants["BW"],
-                "BH": fixed_bbox_base_constants["BH"],
+                "C": 112,
+                "O1": 50,
+                "O2": 90,
+                "BW": 40,
+                "BH": 40,
             },
         },
     }
@@ -719,28 +658,16 @@ def build_augment_config_dict(
             },
             "vstrip": {
                 "enabled": "vstrip" in CONFIG.SELECTED_BASES,
-                "description": (
-                    "縦長短冊ごとに輝度オフセットを加え、境界を線形ブレンドする。"
-                    "（本実装では右半分のみオフセット適用 + 左半分は黒以外を明るく補正）"
-                ),
+                "description": "縦長短冊ごとに輝度を変え、境界を線形ブレンドする",
                 "operations": [
                     {
                         "op": "vstrip",
                         "params": {
                             "n_strips_options": list(args.vstrip_n),
-                            "strip_bright_range": [
-                                float(args.strip_bright_range[0]),
-                                float(args.strip_bright_range[1]),
-                            ],
-                            "offset_sign": "negative_only",   # ← 現コードの仕様（暗くするだけ）
+                            "strip_bright_range": [float(args.strip_bright_range[0]), float(args.strip_bright_range[1])],
+                            "sign_randomization": True,
                             "min_neighbor_diff": 32.0,
                             "blend_ratio": float(args.strip_blend_ratio),
-                            "apply_offset_region": "right_half_only",
-                            "postprocess_left_half": {
-                                "enabled": True,
-                                "black_threshold": float(LEFT_BLACK_THRESHOLD),
-                                "bright_scale": float(LEFT_BRIGHT_SCALE),
-                            },
                         },
                     }
                 ],
@@ -760,81 +687,44 @@ def build_augment_config_dict(
                     }
                 ],
             },
-            "bright": {
-                "enabled": "bright" in CONFIG.SELECTED_BASES,
-                "description": "全体の明るさをスケール（乗算）して変更する",
-                "operations": [
-                    {
-                        "op": "bright",
-                        "params": {"scale_range": [float(args.bright[0]), float(args.bright[1])]},
-                    }
-                ],
-            },
         },
-
         "derived_transforms": {
-            "fixed_bbox": {
-                "enabled": enable_fixed_bbox,   # ★追加
-                "description": "roll 依存の固定BBOX領域に対して、ROIの一部を塗りつぶす（部分塗り）",
-                "base_constants_reference_size": 224,
-                "base_constants": {
-                    "C": fixed_bbox_base_constants["C"],
-                    "O1": fixed_bbox_base_constants["O1"],
-                    "O2": fixed_bbox_base_constants["O2"],
-                    "BW": fixed_bbox_base_constants["BW"],
-                    "BH": fixed_bbox_base_constants["BH"],
-                },
-                "note": "各 szXXX_area では img_size/224 でスケールされ、整数化される",
-            },
-
             "random_bbox": {
                 "enabled": bool(CONFIG.ENABLE_RBBOX),
                 "suffix": DERIVED_SUFFIXES["random_bbox"],
-                "description": (
-                    "（fixed bbox が有効なら）固定BBOXで一部領域を塗った後、"
-                    "重ならないようにランダムBBOXを追加で塗りつぶす"
-                ),
+                "description": "固定BBOXで一部領域を塗った後、重ならないようにランダムBBOXを追加で塗りつぶす",
                 "base_transforms_applied_to": list(CONFIG.SELECTED_BASES),
                 "params": {
                     "rand_boxes_base": [int(args.rand_boxes[0]), int(args.rand_boxes[1])],
                     "rand_box_wh_base": [int(args.rand_box_wh[0]), int(args.rand_box_wh[1])],
-                    "rand_box_area_base": [
-                        int(args.rand_box_area[0]),
-                        int(args.rand_box_area[1]),
-                        int(args.rand_box_area[2]),
-                        int(args.rand_box_area[3]),
-                    ],
+                    "rand_box_area_base": [int(args.rand_box_area[0]), int(args.rand_box_area[1]),
+                                           int(args.rand_box_area[2]), int(args.rand_box_area[3])],
                     "fixed_box_color_mode": args.fixed_color,
                     "random_box_color_mode": args.rand_color,
                     "overlap_avoid_trials": 50,
                 },
             },
-
             "crop": {
                 "enabled": bool(CONFIG.ENABLE_CROP),
                 "suffix": DERIVED_SUFFIXES["crop"],
                 "description": "指定した中心と幅高さで切り出して別位置にランダム貼り付け（可視割合の下限を保証）",
                 "base_transforms_applied_to": list(CONFIG.SELECTED_BASES),
                 "params": {
-                    "crop_params_base": [
-                        int(args.crop_params[0]),
-                        int(args.crop_params[1]),
-                        int(args.crop_params[2]),
-                        int(args.crop_params[3]),
-                    ],
+                    "crop_params_base": [int(args.crop_params[0]), int(args.crop_params[1]),
+                                         int(args.crop_params[2]), int(args.crop_params[3])],
                     "visibility_threshold": float(args.visibility_threshold),
                     "fill_outside_region": "black",
                 },
             },
-
             "hide": {
                 "enabled": bool(CONFIG.ENABLE_HIDE),
                 "suffix": DERIVED_SUFFIXES["hide"],
-                "description": "画像の上半分/下半分/右半分のいずれかを黒で隠す（左半分は隠さない）",
+                "description": "画像を4分割し、そのうちランダムな複数クォドラントを塗りつぶす",
                 "base_transforms_applied_to": list(CONFIG.SELECTED_BASES),
                 "params": {
-                    "choices": ["top", "bottom", "right"],
+                    "hide_n": [int(args.hide_n[0]), int(args.hide_n[1])],
                     "fill_value": 0,
+                    "split_mode": "quadrants",
                 },
             },
         },
@@ -849,10 +739,15 @@ def build_augment_config_dict(
             {
                 "original": "0000.png",
                 "generated": [
+                    "0000_iso_noise.png",
+                    "0000_iso_noise_rbbox.png",
+                    "0000_iso_noise_crop.png",
+                    "0000_iso_noise_hide.png",
+                    "0000_blur.png",
+                    "0000_blur_rbbox.png",
                     "0000_vstrip.png",
-                    "0000_vstrip_rbbox.png",
                     "0000_vstrip_crop.png",
-                    "0000_vstrip_hide.png",
+                    "0000_stretch_hide.png",
                 ],
             }
         ],
@@ -862,11 +757,10 @@ def build_augment_config_dict(
         "meta": meta,
         "config": config,
         "augmentations": augmentations,
-        "targets": targets_info,   # ← main() 側で effective_params を積んでいる前提
+        "targets": targets_info,
         "file_naming": file_naming,
     }
     return cfg
-
 
 # ──────────────────────────────────────────────────────────────
 # メイン処理
@@ -905,14 +799,6 @@ def main():
         default=None,
         help="処理対象とする画像サイズ（szXXX_area の XXX）。例: --target_sizes 224 112"
     )
-
-    # ── FIXED BBOX（roll依存の固定矩形）関連 ───────────────
-    pa.add_argument("--fixed_bbox_C",  type=float, default=112.0, help="fixed bbox 基準中心 C (224基準)")
-    pa.add_argument("--fixed_bbox_O1", type=float, default=50.0,  help="fixed bbox 基準オフセット O1 (224基準)")
-    pa.add_argument("--fixed_bbox_O2", type=float, default=90.0,  help="fixed bbox 基準オフセット O2 (224基準)")
-    pa.add_argument("--fixed_bbox_BW", type=float, default=40.0,  help="fixed bbox 基準幅 BW (224基準)")
-    pa.add_argument("--fixed_bbox_BH", type=float, default=40.0,  help="fixed bbox 基準高さ BH (224基準)")
-
 
     # 色・乱数・テスト設定
     pa.add_argument(
@@ -1107,14 +993,7 @@ def main():
         m = re.search(r"sz(\d+)_area", in_dir.name)
         img_sz = int(m.group(1))
         s = img_sz / 224.0
-        scaler = BBoxScaler(
-            s,
-            base_C=args.fixed_bbox_C,
-            base_O1=args.fixed_bbox_O1,
-            base_O2=args.fixed_bbox_O2,
-            base_BW=args.fixed_bbox_BW,
-            base_BH=args.fixed_bbox_BH,
-        )
+        scaler = BBoxScaler(s)
 
         rel_path = in_dir.relative_to(in_base)
 
